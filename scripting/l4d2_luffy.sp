@@ -120,9 +120,10 @@ v0.9.1
 #define BEAMSPRITE_BLOOD		"materials/sprites/bloodspray.vmt"
 #define BEAMSPRITE_BUBBLE		"materials/sprites/bubble.vmt"
 
-#define SIZE_DROPBUFF			200		// array size for items drop tracking buffer
-#define SIZE_ENTITYBUFF			2000	//<< array size too big. preformance inpact minimal.
-										// (i do realize the existing of dynamic array but i m not willing to debug that :( << we are done here
+#define SIZE_DROPBUFF			200					// array size for items drop tracking buffer
+#define SIZE_ENTITYBUFF			PLATFORM_MAX_PATH	//<< array size too big. preformance inpact minimal.
+													// (i do realize the existing of dynamic array but i m not willing to debug that :( << we are done here
+#define SIZE_MAXP				MAXPLAYERS+1
 
 // fine tune our missile
 #define HOMING_HEIGHT_MIN		250.0	// min altitude vertical missile start to look for enemy << cvar probably???? no...
@@ -164,6 +165,20 @@ g_iHPregenMax, g_iItemGlowType, g_iAirStrikeNum, g_iHomingNum, g_iHomeMissaleDmg
 g_iShieldType, g_iLifeStealAmount, g_iTankMax, g_iWitchMax, g_iShieldCoolDown;
 
 float	g_fLuffyItemLife;
+
+
+enum struct PlayerData
+{
+	Handle	hHealthRegen;
+	Handle	hLuffySpeed;
+	Handle	hLuffyStrength;
+	Handle	hLuffyClock;
+	Handle	hLuffyShield;
+	Handle	hMoveFreeze;
+	Handle	hAirStrike;
+}
+
+//PlayerData g_pdClient[SIZE_MAXP];
 
 Handle	g_hT_ItemLifeSpawn[SIZE_ENTITYBUFF]		= { INVALID_HANDLE, ... };
 Handle	g_hT_HealthRegen[MAXPLAYERS+1]			= { INVALID_HANDLE, ... };
