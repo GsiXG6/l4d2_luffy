@@ -41,17 +41,6 @@ todo list?
 #define AXIS_YAW				1
 #define AXIS_ROLL				2
 
-#define POS_CLOCK				0			// track our model position in array
-#define POS_SPEED				1
-#define POS_POISON				2
-#define POS_REGEN				3
-#define POS_SHIELD				4
-#define POS_STRENGTH			5
-#define POS_GIFT				6
-#define POS_HOMING				7
-#define POS_JETF18				8
-#define POS_SDKHOOK				9
-
 int g_iColor_White[3]	= { 255, 255, 255 };	//<< hardcode this instead for re-use and tweak.
 int g_iColor_Red[3]		= { 255, 000, 000 };	//<< appology.. my OCD kicks in. let that zero be. << Dont you dare change that..!!!
 int g_iColor_LRed[3]	= { 255, 128, 128 };
@@ -63,6 +52,150 @@ int g_iColor_Pinky[3]	= { 255, 000, 255 };
 int g_iColor_Yellow[3]	= { 255, 255, 000 };
 int g_iColor_Dark[3]	= { 128, 128, 128 };
 int g_iColor_Exaust[3]	= { 060, 080, 200 };
+
+enum
+{
+	ePOS_CLOCK = 0,	// track our model position in array
+	ePOS_SPEED,
+	POS_POISON,
+	ePOS_REGEN,
+	ePOS_SHIELD,
+	ePOS_STRENGTH,
+	ePOS_GIFT,
+	ePOS_HOMING,
+	ePOS_JETF18,
+	ePOS_SDKHOOK,
+	ePOS_SIZE
+};
+
+enum struct EntityManager
+{
+	int iSelf;
+	int iChild;
+	int iRandDice;
+	int iRandModelBff[4];
+	
+	Handle hTimer;
+
+	bool bIsRandom;
+	
+	float fLife;
+	float fScale;
+	
+	char sModel[256];
+	void SaveModel( const char[] model, const float scale )
+	{
+		this.fScale = scale;
+		FormatEx( this.sModel, 256, model );
+	}
+	
+	void SetModel( int entity, const char[] model, const float scale )
+	{
+		SetEntityModel( entity, model );
+		SetEntPropFloat( entity, Prop_Send, "m_flModelScale", scale );
+		this.SaveModel( model, scale );
+	}
+	
+	int RollModelDice()
+	{
+		while ( this.iRandDice == this.iRandModelBff[0] || this.iRandDice == this.iRandModelBff[1] || this.iRandDice == this.iRandModelBff[2] || this.iRandDice == this.iRandModelBff[3] )
+		{
+			this.iRandDice = GetRandomInt( 0, (ePOS_SIZE-1));
+		}
+		this.iRandModelBff[3] = this.iRandModelBff[2];
+		this.iRandModelBff[2] = this.iRandModelBff[1];
+		this.iRandModelBff[1] = this.iRandModelBff[0];
+		this.iRandModelBff[0] = this.iRandDice;
+		return this.iRandDice;
+	}
+	
+	bool bThinkLife( const int entity )
+	{
+		if( this.fLife > 0.0 )
+		{
+			this.fLife -= 0.1;
+			float ang[3];
+			GetEntAngle( entity, ang, 20.0, AXIS_YAW );
+			TeleportEntity( entity, NULL_VECTOR, ang, NULL_VECTOR );
+			return true;
+		}
+		this.fLife = 0.0;
+		return false;
+	}
+	
+	int iKill()
+	{
+		int child = EntRefToEntIndex( this.iChild );
+		if( IsEntityValid( child ))
+		{
+			this.iChild = -1;
+			
+			AcceptEntityInput( child, "ClearParent" );
+			int self = EntRefToEntIndex( this.iSelf );
+			if( IsEntityValid( self ))
+			{
+				this.iSelf = -1;
+				AcceptEntityInput( self, "Kill" );
+				return child;
+			}
+		}
+		return -1;
+	}
+}
+
+EntityManager g_esLuffyDrop[PLATFORM_MAX_PATH];
+
+// g_esLuffyDrop[entity].bThinkLife()
+
+enum struct PlayerData
+{
+	Handle	hHealthRegen;
+	Handle	hLuffySpeed;
+	Handle	hLuffyStrength;
+	Handle	hLuffyClock;
+	Handle	hLuffyShield;
+	Handle	hAirStrike;
+	Handle	hMoveFreeze;
+	
+	bool	bAirStrike;
+	bool	bHomingBTN;
+	bool	bIsHPInterrupted;
+	bool	bIsDoubleDashPaused;
+	
+	float	fAbilityCountdown;
+	float	fClientTimeBuffer;
+	float	fCleintHPBuffer;
+	float	fDoubleDashTimeLast;
+
+	int	iHintCountdown;
+	int iPlayerShield;
+	int iCleintHPHealth;
+	int iUnfreezCountdown;
+	int iClientMissile;
+
+	int iClientDice[10];
+	int iRollRandomDice()
+	{
+		while ( this.iClientDice[0] == this.iClientDice[1] || 
+				this.iClientDice[0] == this.iClientDice[2] || 
+				this.iClientDice[0] == this.iClientDice[3] ||
+				this.iClientDice[0] == this.iClientDice[4] ||
+				this.iClientDice[0] == this.iClientDice[5] ) {
+			this.iClientDice[0] = GetRandomInt( 1, 24 ); // total reward 21, we roll 24 so the extra digit is for allowing player to have the ammobox
+		}
+		
+		for( int i = 9; i > 0; i-- )
+		{
+			this.iClientDice[i] = this.iClientDice[i-1];
+		}
+		
+		return this.iClientDice[0];
+	}
+}
+
+PlayerData ges_pdClientLuffy[MAXPLAYERS+1];
+
+// ges_pdClientLuffy[client].fDoubleDashTimeLast
 
 stock void CreatePointHurt( int attacker, int victim, int damage, int damage_type, float pos[3], float radius )  //<< ok
 {
@@ -395,6 +528,11 @@ stock bool IsValidSurvivor( int client )
 	return ( client > 0 && client <= MaxClients && IsClientConnected( client ) && IsClientInGame( client ) && GetClientTeam( client ) == 2 );
 }
 
+stock bool IsEntityValid( int entity )
+{
+	return (entity > MaxClients && IsValidEntity( entity ));
+}
+
 stock int GetClientIndex( int serial, bool toindex )
 {
 	if( toindex )								//toindex true convert serial to index 
@@ -405,17 +543,6 @@ stock int GetClientIndex( int serial, bool toindex )
 	{
 		return GetClientUserId( serial );
 	}
-}
-
-stock int GetEntIndex_IsValid( int entref )
-{
-	// convert entity ref to index and check if valid
-	int index = EntRefToEntIndex( entref );
-	if( index > 0 && IsValidEntity( index ))
-	{
-		return index;
-	}
-	return -1;
 }
 
 stock int GetZclass( int client )
