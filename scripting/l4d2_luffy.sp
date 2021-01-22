@@ -121,7 +121,7 @@ v0.9.1
 #define BEAMSPRITE_BUBBLE		"materials/sprites/bubble.vmt"
 
 #define SIZE_DROPBUFF			200					// array size for items drop tracking buffer
-#define SIZE_ENTITYBUFF			PLATFORM_MAX_PATH	//<< array size too big. preformance inpact minimal.
+#define SIZE_ENTITYBUFF			2049				//<< array size too big. preformance inpact minimal.
 													// (i do realize the existing of dynamic array but i m not willing to debug that :( << we are done here
 // fine tune our missile
 #define HOMING_HEIGHT_MIN		250.0	// min altitude vertical missile start to look for enemy << cvar probably???? no...
