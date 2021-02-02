@@ -31,13 +31,12 @@ todo list?
 #define PARTICLE_ELECTRIC2		"electrical_arc_01_cp0"					// CreatePointParticle and CreatPointDamageRadius
 
 #define DAMAGE_EXPLOSIVE		-2122317758
-#define INVALID_VALUE			-1
 
 #define SHIELD_TYPE_DAMAGE		1		// shield type
 #define SHIELD_TYPE_DECO		2		// type 2 so far unused. just for decoration. also untested.( should be working fine from the previous version)
 #define SHIELD_TYPE_PUSH		3
 
-#define AXIS_PITCH				0			// axis rotation of our angle manipulation
+#define AXIS_PITCH				0		// axis rotation of our angle manipulation
 #define AXIS_YAW				1
 #define AXIS_ROLL				2
 
@@ -57,7 +56,7 @@ enum
 {
 	ePOS_CLOCK = 0,	// track our model position in array
 	ePOS_SPEED,
-	POS_POISON,
+	ePOS_POISON,
 	ePOS_REGEN,
 	ePOS_SHIELD,
 	ePOS_STRENGTH,
@@ -193,9 +192,9 @@ enum struct PlayerData
 	}
 }
 
-PlayerData ges_pdClientLuffy[MAXPLAYERS+1];
+PlayerData g_PDClientLuffy[MAXPLAYERS+1];
 
-// ges_pdClientLuffy[client].fDoubleDashTimeLast
+// g_PDClientLuffy[client].fDoubleDashTimeLast
 
 stock void CreatePointHurt( int attacker, int victim, int damage, int damage_type, float pos[3], float radius )  //<< ok
 {
