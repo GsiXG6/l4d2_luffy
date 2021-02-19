@@ -3,7 +3,7 @@
 #include <sdktools>
 #include <sdkhooks>
 #pragma newdecls required
-#include <l4d2_luffy>
+#include <l4d2_luffy_stock.sp>
 
 #define PLUGIN_NAME			"l4d2_luffy"
 #define PLUGIN_VERSION		"0.9.1"
@@ -81,6 +81,7 @@ v0.9.1
 // "models/editor/air_node_hint.mdl"
 // "models/editor/air_node.mdl"
 // "models/editor/overlay_helper.mdl"
+// "models/props_unique/airport/atlas_break_ball.mdl"
 ////////////////////////////////////////////////////////////
 
 // dont replace this model below. its a default model.
@@ -120,9 +121,6 @@ v0.9.1
 #define BEAMSPRITE_BLOOD		"materials/sprites/bloodspray.vmt"
 #define BEAMSPRITE_BUBBLE		"materials/sprites/bubble.vmt"
 
-#define SIZE_DROPBUFF			200					// array size for items drop tracking buffer
-#define SIZE_ENTITYBUFF			2049				//<< array size too big. preformance inpact minimal.
-													// (i do realize the existing of dynamic array but i m not willing to debug that :( << we are done here
 // fine tune our missile
 #define HOMING_HEIGHT_MIN		250.0	// min altitude vertical missile start to look for enemy << cvar probably???? no...
 #define HOMING_EXPIRE			8.0		// if targeting rocket still survive longer than this, remove him from world.
@@ -139,8 +137,9 @@ v0.9.1
 #define SHIELD_DORM_ALPHA		60		// color alpha of the fake dorm shield
 
 // fine tune our strength midair dash/movement
-#define DASH_FORCE				300.0	// force to propel player at desired direction during strength ability. << new problem.. he might chicken out and run to saferoom :(
-#define DASH_HEIGHT				130.0	// only allow midair dash after reach this height.
+#define DASH_FORCE				400.0	// force to propel player at desired direction during strength ability. << new problem.. he might chicken out and run to saferoom :(
+#define DASH_HEIGHT				100.0	// only allow midair dash after reach this height.
+#define DASH_HEIGHT				100.0	// only allow midair dash after reach this height.
 #define STRENGTH_GRAVITY		0.3		// gravity mult for strength ability.
 
 #define ANIMATION_COUNT			12		// play pickup animation this much to emulate small to big model. control the final animation size here.
@@ -164,26 +163,24 @@ g_iShieldType, g_iLifeStealAmount, g_iTankMax, g_iWitchMax, g_iShieldCoolDown;
 
 float	g_fLuffyItemLife;
 
-float	g_fHomingBaseHeight[SIZE_ENTITYBUFF]	= { 0.0, ... };
-int		g_iHomingBaseOwner[SIZE_ENTITYBUFF]		= { -1, ... };
+float	g_fHomingBaseHeight[SIZE_ENTITYBUFF];
+int		g_iHomingBaseOwner[SIZE_ENTITYBUFF] = { -1, ... };
 int		g_iHomingBaseTarget[SIZE_ENTITYBUFF][SIZE_ENTITYBUFF];
 
 int		g_iBeamSprite_Blood;
 int		g_iBeamSprite_Bubble;
-
-int		g_iWeaponDropBuffer[SIZE_DROPBUFF]		= { -1, ... };
-
-bool	g_bIsRoundStart							= false;
+int		g_iWeaponDropBuffer[SIZE_DROPBUFF] = { -1, ... };
 
 int		g_iDropSelectionType[3];
 int		g_iLuffyModelSelection[5];
-int		g_iLuffySpawnCount						= 0;
+int		g_iLuffySpawnCount;
 
 char	g_sModelBuffer[ePOS_SIZE][128];
 float	g_fModelScale[ePOS_SIZE];
 
-bool	g_bSafeToRollNextDiceModel				= true;
-bool	g_bIsParticlePrecached					= false;
+bool	g_bSafeToRollNextDiceModel = true;
+bool	g_bIsParticlePrecached;
+bool	g_bIsRoundStart;
 
 float	g_fSkinAnimeScale[SIZE_ENTITYBUFF];		// buffer to store our pickup animation model scale
 int		g_iSkinAnimeCount[SIZE_ENTITYBUFF];		// buffer to store our pickup animation count
@@ -191,10 +188,10 @@ int		g_iSkinAnimeCount[SIZE_ENTITYBUFF];		// buffer to store our pickup animatio
 char	g_sCURRENT_MAP[128];
 
 ////// debugging var only
-bool	g_bDeveloperMode 	= false;		// if true = enable cheat for admin to use Air Strike and Homing Missile.. knock youself out.
-bool	g_bBypassMissileCap	= false;		// if true, max number of missile cap 1000 bypassed. for debugging.
-bool	g_bIsDebugMode		= false;		// if true, luffy drop body part, missile part and jet part highlighted. for debug.
-bool	g_bShowDummyModel	= false;		// if true, sdkhook dummy will visible. for debug.
+bool	g_bDeveloperMode 	= true;			// if true = enable cheat for admin to use Air Strike and Homing Missile.. knock youself out.
+bool	g_bBypassMissileCap	= false;			// if true, max number of missile cap 1000 bypassed. for debugging.
+bool	g_bIsDebugMode		= false;			// if true, luffy drop body part, missile part and jet part highlighted. for debug.
+bool	g_bShowDummyModel	= false;			// if true, sdkhook dummy will visible. for debug.
 
 
 
@@ -272,6 +269,7 @@ public void OnPluginStart()
 	HookEvent( "upgrade_pack_used",		EVENT_UpgradePackUsed );
 	HookEvent( "upgrade_pack_added",	EVENT_UpgradePackAdded );
 	HookEvent( "revive_success",		EVENT_ReviveSuccsess );
+	HookEvent( "player_jump",			EVENT_PlayerJump );
 	
 	g_ConVarLuffyEnable.AddChangeHook( CVAR_Changed );
 	g_ConVarLuffyChance.AddChangeHook( CVAR_Changed );
@@ -307,10 +305,9 @@ public void OnPluginStart()
 	g_ConVarAllowPickAnime.AddChangeHook( CVAR_Changed );
 	g_ConVarAllowMissileColor.AddChangeHook( CVAR_Changed );
 	
-	RegAdminCmd( "luffy_bazoka",	AdminMissileCheat,	ADMFLAG_ROOT );
-	RegAdminCmd( "luffy_model",		AdminModelSpawn,	ADMFLAG_ROOT );
-	RegAdminCmd( "luffy_ability",	AdminCheatAbility,	ADMFLAG_ROOT );
-	RegAdminCmd( "luffy_reload",	AdminReloadMap,		ADMFLAG_ROOT );
+	RegAdminCmd( "luffy_bazoka",	AdminMissileCheat,	ADMFLAG_GENERIC );
+	RegAdminCmd( "luffy_model",		AdminModelSpawn,	ADMFLAG_GENERIC );
+	RegAdminCmd( "luffy_ability",	AdminCheatAbility,	ADMFLAG_GENERIC );
 	
 	UpdateCVar();
 }
@@ -322,30 +319,46 @@ public void OnConfigsExecuted()
 
 public void OnClientPutInServer( int client )
 {
-	g_PDClientLuffy[client].iPlayerShield		= -1;
-	g_PDClientLuffy[client].iClientMissile	= -1;
-	g_PDClientLuffy[client].iHintCountdown	= 0;
-	g_PDClientLuffy[client].iCleintHPHealth	= 0;
-	g_PDClientLuffy[client].fCleintHPBuffer	= 0.0;
-	g_PDClientLuffy[client].bAirStrike		= false;
-	g_PDClientLuffy[client].bHomingBTN		= false;
-	g_PDClientLuffy[client].hHealthRegen		= INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffyClock		= INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffyShield		= INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffySpeed		= INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffyStrength	= INVALID_HANDLE;
-	g_PDClientLuffy[client].hMoveFreeze		= INVALID_HANDLE;
+	PDClientLuffy[client].iPlayerShield	= -1;
+	PDClientLuffy[client].iClientMissile	= -1;
+	PDClientLuffy[client].iHintCountdown	= 0;
+	PDClientLuffy[client].iCleintHPHealth	= 0;
+	PDClientLuffy[client].fCleintHPBuffer	= 0.0;
+	PDClientLuffy[client].iLuffyType		= TYPE_NONE;
+	
+	PDClientLuffy[client].bAirStrike		= false;
+	PDClientLuffy[client].bHomingBTN		= false;
+	PDClientLuffy[client].hHealthRegen	= null;
+	PDClientLuffy[client].hMoveFreeze		= null;
 }
 
 public void OnMapStart()
 {
+	for( int i = 1; i <= MaxClients; i++ )
+	{
+		PDClientLuffy[i].TimerReset();
+	}
+	
 	g_bIsParticlePrecached = false;
 	GetCurrentMap( g_sCURRENT_MAP, sizeof( g_sCURRENT_MAP ));
 	CreateTimer( 0.1, Timer_PrecacheModel );
 }
 
+public void OnMapEnd()
+{
+	for( int i = 1; i <= MaxClients; i++ )
+	{
+		PDClientLuffy[i].TimerDelete();
+	}
+	
+	for( int i = 0; i < SIZE_ENTITYBUFF; i++ )
+	{
+		delete EMLuffyDrop[i].hTimer;
+	}
+}
+
 /// if you change the model to your own liking... each model scaled individualy in here.
-public Action Timer_PrecacheModel( Handle timer, any data ) //<< ok
+public Action Timer_PrecacheModel( Handle timer, any data )
 {
 	if( g_bWithCustomModel )
 	{
@@ -471,7 +484,7 @@ public Action Timer_PrecacheModel( Handle timer, any data ) //<< ok
 	}
 }
 
-public void CVAR_Changed( Handle convar, const char[] oldValue, const char[] newValue ) //<< ok
+public void CVAR_Changed( Handle convar, const char[] oldValue, const char[] newValue )
 {
 	UpdateCVar();
 	
@@ -483,7 +496,7 @@ public void CVAR_Changed( Handle convar, const char[] oldValue, const char[] new
 	}
 }
 
-void UpdateCVar()	//<< ok
+void UpdateCVar()
 {
 	g_bLuffyEnable			= g_ConVarLuffyEnable.BoolValue;
 	g_iLuffyChance			= g_ConVarLuffyChance.IntValue;
@@ -520,12 +533,13 @@ void UpdateCVar()	//<< ok
 	g_bAllowMissileColor	= g_ConVarAllowMissileColor.BoolValue;
 }
 
-public Action AdminMissileCheat( int client, any args ) //<< ok	 <<<<<========= admin cheat command.. intended for testing. Now leave it here.
+// admin cheat command.. intended for testing.
+public Action AdminMissileCheat( int client, any args )
 {
 	if ( IsValidSurvivor( client ) && g_bDeveloperMode )
 	{
-		g_PDClientLuffy[client].bAirStrike	= true;
-		g_PDClientLuffy[client].bHomingBTN 	= true;
+		PDClientLuffy[client].bAirStrike	= true;
+		PDClientLuffy[client].bHomingBTN 	= true;
 		switch( GetRandomInt( 1, 3 ))
 		{
 			case 1:
@@ -546,7 +560,8 @@ public Action AdminMissileCheat( int client, any args ) //<< ok	 <<<<<========= 
 	return Plugin_Handled;
 }
 
-public Action AdminModelSpawn( int client, any args ) //<< ok	 <<<<<========= admin spawn command to test spawn model..
+// admin spawn command to test spawn model..
+public Action AdminModelSpawn( int client, any args )
 {
 	if ( IsValidSurvivor( client ) && g_bDeveloperMode )
 	{
@@ -603,7 +618,7 @@ public Action AdminModelSpawn( int client, any args ) //<< ok	 <<<<<========= ad
 	return Plugin_Handled;
 }
 
-public Action Timer_TestRotate( Handle timer, any entref ) //<< ok
+public Action Timer_TestRotate( Handle timer, any entref )
 {
 	int ent = EntRefToEntIndex( entref );
 	if( ent > MaxClients && IsValidEntity( ent ) && g_bIsRoundStart )
@@ -617,18 +632,10 @@ public Action Timer_TestRotate( Handle timer, any entref ) //<< ok
 	return Plugin_Stop;
 }
 
-public Action Timer_DeletIndex( Handle timer, any entref )		//<< ok
+// admin cheat command to get instant ability
+public Action AdminCheatAbility( int client, any args )
 {
-	int entity = EntRefToEntIndex( entref );
-	if( IsEntityValid( entity ))
-	{
-		AcceptEntityInput( entity, "Kill" );
-	}
-}
-
-public Action AdminCheatAbility( int client, any args ) //<< ok	 <<<<<========= admin cheat command to get instant ability..
-{
-	if ( IsValidSurvivor( client ) && g_bDeveloperMode )
+	if ( client > 0 && g_bDeveloperMode )
 	{
 		// Show client usage explanation if args less than 2
 		if ( args < 1 )
@@ -642,106 +649,66 @@ public Action AdminCheatAbility( int client, any args ) //<< ok	 <<<<<========= 
 		char arg1[8];
 		GetCmdArg( 1, arg1, sizeof( arg1 ));
 		int type = StringToInt( arg1 );
-		if( type < 1 || type > 7 )
+		if( type > TYPE_NONE && type < TYPE_HEALTH && PDClientLuffy[client].iLuffyType != TYPE_NONE )
+		{
+			ReplyToCommand( client, "[LUFFY]: Luffy ability still active!!" );
+			return Plugin_Handled;
+		}
+		
+		if( type < TYPE_CLOCK || type > TYPE_FREEZE )
 		{
 			ReplyToCommand( client, "[LUFFY]: ability type: 1=Clock, 2=Speed, 3=Shield, 4=Strength, 5=Health, 6=Punishment, 7=Freeze" );
 			return Plugin_Handled;
 		}
 		
-		if( type == 1 )
+		if( type == TYPE_CLOCK )
 		{
-			if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )
+			if( PDClientLuffy[client].fAbilityCountdown == 0.0 )
 			{
-				RunLuffyClock( client );
-				return Plugin_Handled;
+				SetLuffyClock( client );
 			}
 		}
-		else if( type == 2 )
+		else if( type == TYPE_SPEED )
 		{
-			if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )
+			if( PDClientLuffy[client].fAbilityCountdown == 0.0 )
 			{
-				RunLuffySpeed( client );
-				return Plugin_Handled;
+				SetLuffySpeed( client );
 			}
 		}
-		else if( type == 3 )
+		else if( type == TYPE_SHIELD )
 		{
-			if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )
+			if( PDClientLuffy[client].fAbilityCountdown == 0.0 )
 			{
-				RunLuffyShield( client );
-				return Plugin_Handled;
+				SetLuffyShield( client );
 			}
 		}
-		else if( type == 4 )
+		else if( type == TYPE_STRENGTH )
 		{
-			if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )
+			if( PDClientLuffy[client].fAbilityCountdown == 0.0 )
 			{
-				RunLuffyStrength( client );
-				return Plugin_Handled;
+				SetLuffyStrength( client );
 			}
 		}
-		else if( type == 5 )
+		else if( type == TYPE_HEALTH )
 		{
-			if( g_PDClientLuffy[client].hHealthRegen == INVALID_HANDLE )
+			if( PDClientLuffy[client].hHealthRegen == null )
 			{
-				RunLuffyHealth( client );
-				return Plugin_Handled;
+				SetLuffyHealth( client );
 			}
 		}
-		else if( type == 6 )
+		else if( type == TYPE_POISON )
 		{
-			RunLuffyPunishment( client );
-			return Plugin_Handled;
+			SetLuffyPunishment( client );
 		}
-		else if( type == 7 )
+		else if( type == TYPE_FREEZE )
 		{
-			RunFreezeClient( client );
-			return Plugin_Handled;
-		}
-		
-		if( type > 0 && type < 6 )
-		{
-			if( g_PDClientLuffy[client].hLuffyClock != INVALID_HANDLE )
-			{
-				ReplyToCommand( client, "[LUFFY]: Luffy Clock still active.." );
-			}
-			else if( g_PDClientLuffy[client].hLuffySpeed != INVALID_HANDLE )
-			{
-				ReplyToCommand( client, "[LUFFY]: Luffy Speed still active.." );
-			}
-			else if( g_PDClientLuffy[client].hLuffyShield != INVALID_HANDLE )
-			{
-				ReplyToCommand( client, "[LUFFY]: Luffy Shield still active.." );
-			}
-			else if( g_PDClientLuffy[client].hLuffyStrength != INVALID_HANDLE )
-			{
-				ReplyToCommand( client, "[LUFFY]: Luffy Strength still active.." );
-			}
-			else
-			{
-				ReplyToCommand( client, "[LUFFY]: You should not see this message" );
-			}
+			SetFreeze( client );
 		}
 	}
 	return Plugin_Handled;
 }
 
-public Action AdminReloadMap( int client, any args ) //<< ok	 <<<<<========= admin command to reload the map, also for me to refresh plugins..
-{
-	if ( IsValidSurvivor( client ))
-	{
-		g_bIsRoundStart = false;
-		ReplyToCommand( client, "\x01[LUFFY]: Reloading \x05%s \x01in 3 secs", g_sCURRENT_MAP );
-		CreateTimer( 3.0, Timer_RestartServer, _ );
-	}
-}
-
-public Action Timer_RestartServer( Handle timer, any userid ) //<< ok
-{
-	ServerCommand( "changelevel %s", g_sCURRENT_MAP );
-}
-
-public void EVENT_RoundStartEnd ( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_RoundStartEnd ( Event event, const char[] name, bool dontBroadcast )
 {
 	if( StrEqual( name, "round_start", false ))
 	{
@@ -752,9 +719,9 @@ public void EVENT_RoundStartEnd ( Event event, const char[] name, bool dontBroad
 		int j;
 		for( int i = 0; i < SIZE_ENTITYBUFF; i++ )
 		{
-			g_esLuffyDrop[i].hTimer		= INVALID_HANDLE;
-			g_esLuffyDrop[i].bIsRandom	= false;
-			g_esLuffyDrop[i].fLife		= 0.0;
+			delete EMLuffyDrop[i].hTimer;
+			
+			EMLuffyDrop[i].fLife		= 0.0;
 			g_fHomingBaseHeight[i]		= 0.0;
 			if ( i < SIZE_DROPBUFF )
 			{
@@ -773,7 +740,7 @@ public void EVENT_RoundStartEnd ( Event event, const char[] name, bool dontBroad
 	}
 }
 
-public void EVENT_PlayerSpawn( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_PlayerSpawn( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 	
@@ -781,90 +748,50 @@ public void EVENT_PlayerSpawn( Event event, const char[] name, bool dontBroadcas
 	int client = GetClientOfUserId( userid );
 	if ( IsValidSurvivor( client ))
 	{
-		g_PDClientLuffy[client].bAirStrike	= false;
-		g_PDClientLuffy[client].bHomingBTN	= false;
-		g_PDClientLuffy[client].hAirStrike	= INVALID_HANDLE;
-		g_PDClientLuffy[client].hHealthRegen	= INVALID_HANDLE;
+		PDClientLuffy[client].bAirStrike	= false;
+		PDClientLuffy[client].bHomingBTN	= false;
+		PDClientLuffy[client].hAirStrike	= null;
+		PDClientLuffy[client].hHealthRegen	= null;
+		PDClientLuffy[client].iLuffyType	= TYPE_NONE;
+		
 		ResetLuffyAbility( client );
-		FreezePlayerButton( client, false );
+		PDClientLuffy[client].ButtonUnfreeze( client );
 		
 		if( !g_bIsParticlePrecached )
 		{
 			g_bIsParticlePrecached = true;
-			CreateTimer( 0.0, Timer_PrecacheEntity, userid );
+			CreateTimer( 0.1, Timer_PrecacheEntity, userid );
 		}
 	}
 }
 
-public Action Timer_PrecacheEntity( Handle timer, any data ) //<< ok
-{
-	int client = GetClientIndex( data, true );
-	if( IsValidSurvivor( client ))
-	{
-		int count_prt = 0;
-		bool missileshoot = false;
-
-		float pos1[3];
-		float pos2[3];
-		GetEntOrigin( client, pos1, 3000.0 );
-		GetEntOrigin( client, pos2, 5000.0 );
-		
-		if( CreatPointDamageRadius( pos1, PARTICLE_CREATEFIRE, 0, 0, -1 )) { count_prt += 1; }
-		if( CreatePointParticle( pos1, PARTICLE_EXPLOSIVE, 0.1 )) { count_prt += 1; }
-		if( CreatePointParticle( pos1, PARTICLE_ELECTRIC1, 0.1 )) { count_prt += 1; }
-		if( CreatePointParticle( pos1, PARTICLE_ELECTRIC2, 0.1 )) { count_prt += 1; }
-		
-		int missile = CreateMissileProjectile( -1, pos1, pos2 );
-		if( missile != -1 )
-		{
-			ChangeDirectionAndShoot( missile, pos2, MISSILE_TARGET_SPEED, -90.0 ); //-90.0 is the molotov body pitch correction
-			CreateTimer( 1.0, Timer_MissileExplode, EntIndexToEntRef( missile ));
-			missileshoot = true;
-		}
-		
-		if( g_bIsDebugMode )
-		{
-			if( count_prt < 4 )
-			{
-				PrintToServer( "" );
-				PrintToServer( "|LUFFY| Error Precache particle | less %d particle |LUFFY|", ( 4 - count_prt ));
-				PrintToServer( "" );
-			}
-			else
-			{
-				PrintToServer( "|LUFFY| All Particle Precached Succsessfuly |LUFFY|" );
-			}
-			
-			if( missileshoot )
-			{
-				PrintToServer( "|LUFFY| Missile has beed precached :) |LUFFY|" );
-			}
-		}
-	}
-}
-
-public void EVENT_SurvivorRescued( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_SurvivorRescued( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 	
 	int  client = GetClientOfUserId( event.GetInt( "victim" ));
 	if ( IsValidSurvivor( client ))
 	{
-		g_PDClientLuffy[client].bAirStrike	= false;
-		g_PDClientLuffy[client].bHomingBTN	= false;
-		g_PDClientLuffy[client].hAirStrike	= INVALID_HANDLE;
-		g_PDClientLuffy[client].hHealthRegen	= INVALID_HANDLE;
+		PDClientLuffy[client].bAirStrike	= false;
+		PDClientLuffy[client].bHomingBTN	= false;
+		PDClientLuffy[client].hAirStrike	= null;
+		PDClientLuffy[client].hHealthRegen	= null;
+		PDClientLuffy[client].iLuffyType	= TYPE_NONE;
 		ResetLuffyAbility( client );
-		FreezePlayerButton( client, false );
+		PDClientLuffy[client].ButtonUnfreeze( client );
 	}
 }
 
-public void EVENT_PlayerDeath( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_PlayerDeath( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 
-	int  badguy = GetClientOfUserId( event.GetInt( "userid" ));
-	if ( IsValidInfected( badguy ))
+	int  client = GetClientOfUserId( event.GetInt( "userid" ));
+	if( IsValidSurvivor( client ))
+	{
+		PDClientLuffy[client].iLuffyType = TYPE_NONE;
+	}
+	else if ( IsValidInfected( client ))
 	{
 		int  attacker = GetClientOfUserId( event.GetInt( "attacker" ));
 		if( IsValidSurvivor( attacker ))
@@ -875,11 +802,11 @@ public void EVENT_PlayerDeath( Event event, const char[] name, bool dontBroadcas
 			}
 			
 			// life steal during super strength.
-			if ( g_PDClientLuffy[attacker].hLuffyStrength != INVALID_HANDLE )
+			if ( PDClientLuffy[attacker].iLuffyType == TYPE_STRENGTH )
 			{
 				float bff[3];
 				float pos[3];
-				GetEntOrigin( badguy, pos, 10.0 );
+				GetEntOrigin( client, pos, 10.0 );
 				
 				for( int i = 1; i <= 5; i++ )
 				{
@@ -895,13 +822,13 @@ public void EVENT_PlayerDeath( Event event, const char[] name, bool dontBroadcas
 				}
 				switch( GetRandomInt( 1, 3 )) {
 					case 1: {
-						EmitSoundToAll( SND_ZAP_1, badguy, SNDCHAN_AUTO );
+						EmitSoundToAll( SND_ZAP_1, client, SNDCHAN_AUTO );
 					}
 					case 2: {
-						EmitSoundToAll( SND_ZAP_2, badguy, SNDCHAN_AUTO );
+						EmitSoundToAll( SND_ZAP_2, client, SNDCHAN_AUTO );
 					}
 					case 3: {
-						EmitSoundToAll( SND_ZAP_3, badguy, SNDCHAN_AUTO );
+						EmitSoundToAll( SND_ZAP_3, client, SNDCHAN_AUTO );
 					}
 				}
 				
@@ -923,7 +850,7 @@ public void EVENT_PlayerDeath( Event event, const char[] name, bool dontBroadcas
 		}
 
 
-		if ( GetZclass( badguy ) == ZOMBIE_TANK && !g_bAllowTankDrop )
+		if ( GetZclass( client ) == ZOMBIE_TANK && !g_bAllowTankDrop )
 		{
 			return;
 		}
@@ -932,12 +859,12 @@ public void EVENT_PlayerDeath( Event event, const char[] name, bool dontBroadcas
 		// if not safe to roll, consider this kill a waste.
 		if( g_bSafeToRollNextDiceModel && g_iLuffySpawnCount < g_iLuffySpawnMax )
 		{
-			RollLuffyDropDice( badguy );
+			RollLuffyDropDice( client );
 		}
 	}
 }
 
-public void EVENT_WitchDeath( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_WitchDeath( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable || !g_bAllowWitchDrop ) return;
 
@@ -952,7 +879,7 @@ public void EVENT_WitchDeath( Event event, const char[] name, bool dontBroadcast
 			if( IsValidSurvivor( attacker ))
 			{
 				// life steal during super strength.
-				if ( g_PDClientLuffy[attacker].hLuffyStrength != INVALID_HANDLE )
+				if ( PDClientLuffy[attacker].iLuffyType == TYPE_STRENGTH )
 				{
 					float bff[3];
 					float pos[3];
@@ -1009,212 +936,14 @@ public void EVENT_WitchDeath( Event event, const char[] name, bool dontBroadcast
 	}
 }
 
-void RollLuffyDropDice( int client )
-{
-	int drop = true;
-	float pos_infected[3];
-	float pos_survivor[3];
-	GetEntOrigin( client, pos_infected, 0.0 );
-	
-	// drop luffy item unless its too close to survivor
-	for ( int  i = 1; i <= MaxClients; i ++ )
-	{
-		if ( IsValidSurvivor( i ))
-		{
-			GetEntOrigin( i, pos_survivor, 0.0 );
-			if ( GetVectorDistance( pos_infected, pos_survivor ) <= 30.0 )
-			{
-				if( IsFakeClient( i ) && !g_bAllowBotPickUp ) { continue ;}
-
-				drop = false;
-				break;
-			}
-		}
-	}
-
-	if ( drop && GetRandomInt( 1, 100 ) <= g_iLuffyChance )
-	{
-		// option 1 = drop luffy item with selected model type.
-		// option 2 = drop luffy item with random model type.
-		// option 3 = drop ammobox. << this should have lifespan to prevent our server from flooded with ammobox.
-
-		int modeltype		= 0;
-		bool israndommodel	= true;
-		bool candropluffy	= false;
-		
-		// determind which luffy drop type we get.
-		// this while loop with GetRandomInt inside is damn expensive.
-		// to avoid this we need timer to free this death event from while loop. 
-		// but that gonna drag our drop interval chance between kill a bit longer. << not gonna do timer for this. i m done saving just a fraction of server preformance improvement.
-		// update: for fakkk shake just do a random interger without while loop.... << Note to self >> do this next time you make an update.
-		// update2: problem is we getting almost same chances every time. the random interger is not really random. << get a decision on this.
-		
-		while( g_iDropSelectionType[0] == g_iDropSelectionType[1] || g_iDropSelectionType[0] == g_iDropSelectionType[2] )
-		{
-			g_iDropSelectionType[0] = GetRandomInt( 1, 5 );
-		}
-		g_iDropSelectionType[2] = g_iDropSelectionType[1];
-		g_iDropSelectionType[1] = g_iDropSelectionType[0];
-		
-		if( g_iDropSelectionType[0] > 3 )
-		{
-			modeltype		= g_iLuffyModelSelection[0];
-			israndommodel	= false;	// this drop type not a random model
-			candropluffy	= true;		// we allowed to drop luffy item
-		}
-		else if( g_iDropSelectionType[0] == 3 )
-		{
-			// model selection dont matter here. its random in timer
-			candropluffy = true;	//we can drop
-		}
-		else
-		{
-			char ammoname[64];
-			if( GetRandomInt( 1, 2 ) == 1 )
-			{
-				Format( ammoname, sizeof( ammoname ), "weapon_upgradepack_explosive" );
-			}
-			else
-			{
-				Format( ammoname, sizeof( ammoname ), "weapon_upgradepack_incendiary" );
-			}
-			
-			int ammobox = GivePlayerItems( client, ammoname );
-			if( ammobox != -1 )
-			{
-				// kill this ammobox to prevent out server flooded.
-				CreateTimer( AMMOBOX_LIFE, Timer_AmmoBoxlife, EntIndexToEntRef( ammobox ), TIMER_FLAG_NO_MAPCHANGE );
-			}
-		}
-		
-		if( candropluffy )
-		{
-			float pos_world[3];
-			float ang_world[3] = { 0.0, 0.0, 0.0 };
-			GetEntOrigin( client, pos_world, 20.0 );
-
-			// a dummy detect player touch
-			int dummy = CreateEntParent( DMY_SDKHOOK, pos_world, ang_world, g_fModelScale[ePOS_SDKHOOK] );
-			if( dummy > MaxClients && IsValidEntity( dummy ))
-			{
-				float pos_parent[3] = { 0.0, 0.0, 0.0 };
-				
-				// a decoy skin.. what player actualy see but cant touch
-				int skin = CreatEntChild( dummy, g_sModelBuffer[modeltype], pos_world, pos_parent, ang_world, g_fModelScale[modeltype] );
-				if( skin > MaxClients && IsValidEntity( skin ))
-				{
-					g_esLuffyDrop[dummy].iSelf = EntIndexToEntRef( dummy );
-					g_esLuffyDrop[dummy].iChild = EntIndexToEntRef( skin );
-					g_esLuffyDrop[dummy].SaveModel( g_sModelBuffer[modeltype], g_fModelScale[modeltype] );
-
-					if( g_bShowDummyModel )
-					{
-						ToggleGlowEnable( dummy, true );
-					}
-					else
-					{
-						SetRenderColour( dummy, g_iColor_White, 0 );	// make our dummy invisible
-					}
-					
-					ToggleGlowEnable( skin, true );
-					SDKHook( dummy, SDKHook_StartTouchPost, OnLuffyObjectTouch );
-					
-					float life = g_fLuffyItemLife;
-					if ( life > 300.0 ) life = 300.0;
-					if ( life < 10.0 ) life = 10.0;
-				
-					g_iLuffySpawnCount++;
-					g_esLuffyDrop[dummy].bIsRandom	= israndommodel;
-					g_esLuffyDrop[dummy].fLife = life;
-					g_esLuffyDrop[dummy].hTimer = CreateTimer( 0.1, Timer_LuffySpawnLife, EntIndexToEntRef( dummy ), TIMER_REPEAT );
-					
-					if( !israndommodel )
-					{
-						// determine which model to drop next ahead of time after
-						
-						g_bSafeToRollNextDiceModel = false;
-						// create this timer to free EVENT_PlayerDeath and EVENT_WitchDeath out of while loop;
-						CreateTimer( 0.05, Timer_ScrambleModelSelectionDice, 0, TIMER_FLAG_NO_MAPCHANGE );
-					}
-				}
-				else
-				{
-					RemoveEntity( dummy );
-				}
-			}
-		}
-	}
-}
-
-public Action Timer_ScrambleModelSelectionDice( Handle timer, any data )
-{
-	while(	g_iLuffyModelSelection[0] == g_iLuffyModelSelection[1] || g_iLuffyModelSelection[0] == g_iLuffyModelSelection[2] ||
-			g_iLuffyModelSelection[0] == g_iLuffyModelSelection[3] || g_iLuffyModelSelection[0] == g_iLuffyModelSelection[4] ) {
-			g_iLuffyModelSelection[0] = GetRandomInt( 0, 8 );
-	}
-	
-	g_iLuffyModelSelection[4] = g_iLuffyModelSelection[3];
-	g_iLuffyModelSelection[3] = g_iLuffyModelSelection[2];
-	g_iLuffyModelSelection[2] = g_iLuffyModelSelection[1];
-	g_iLuffyModelSelection[1] = g_iLuffyModelSelection[0];
-	
-	g_bSafeToRollNextDiceModel = true;
-}
-
-public Action Timer_LuffySpawnLife( Handle timer, any entref ) //<< ok
-{
-	int entity = EntRefToEntIndex( entref );
-	if( IsEntityValid( entity ))
-	{
-		int child = GetEntityChild( entity );
-		if( IsEntityValid( child ))
-		{
-			if ( g_esLuffyDrop[entity].bThinkLife( entity ) && g_bIsRoundStart )
-			{
-				if( g_esLuffyDrop[entity].bIsRandom )
-				{
-					int rand = g_esLuffyDrop[entity].RollModelDice();
-					g_esLuffyDrop[entity].SetModel( entity, g_sModelBuffer[rand], g_fModelScale[rand] );
-				}
-				
-				return Plugin_Continue;
-			}
-	
-			g_iLuffySpawnCount--;
-			if( g_iLuffySpawnCount < 0 )
-			{
-				g_iLuffySpawnCount = 0;
-			}
-			
-			g_esLuffyDrop[entity].hTimer = INVALID_HANDLE;
-			SDKUnhook( entity, SDKHook_StartTouchPost, OnLuffyObjectTouch );
-			RemoveEntity_KillHierarchy( entity );
-		}
-	}
-	return Plugin_Stop;
-}
-
-public Action Timer_AmmoBoxlife( Handle timer, any entref )
-{
-	int ammobox = EntRefToEntIndex( entref );
-	if( IsEntityValid( ammobox ))
-	{
-		int client = GetOwner( ammobox );
-		if( !IsValidSurvivor( client ))
-		{
-			RemoveEntity_Kill( ammobox );
-		}
-	}
-}
-
 public Action OnPlayerRunCmd( int client, int& buttons, int& impulse, float vel[3], float angles[3], int& weapon ) //<< ok == launch airstrike and dashing here
 {
 	// this guy launching airstrike
 	if (( buttons & IN_RELOAD ) && ( buttons & IN_ATTACK ))
 	{
-		if( ( g_PDClientLuffy[client].bAirStrike ) && g_PDClientLuffy[client].hAirStrike == INVALID_HANDLE )
+		if( ( PDClientLuffy[client].bAirStrike ) && PDClientLuffy[client].hAirStrike == null )
 		{
-			g_PDClientLuffy[client].bAirStrike	= false;
+			PDClientLuffy[client].bAirStrike	= false;
 			PrintHintTextToAll( "++ %N Launched Air Strike ++", client );
 			
 			switch( GetRandomInt( 1, 3 ))
@@ -1256,17 +985,17 @@ public Action OnPlayerRunCmd( int client, int& buttons, int& impulse, float vel[
 						if ( miss > 1000 ) miss = 1000;
 					}
 					
-					g_PDClientLuffy[client].iClientMissile = miss + 1;	// plus 1 because we cutdown 1 missile before actually fire any
-					g_PDClientLuffy[client].hAirStrike = CreateTimer( 0.1, Timer_JetF18Life, EntIndexToEntRef( jetf18 ), TIMER_REPEAT );
+					PDClientLuffy[client].iClientMissile = miss + 1;	// plus 1 because we cutdown 1 missile before actually fire any
+					PDClientLuffy[client].hAirStrike = CreateTimer( 0.1, Timer_JetF18Life, EntIndexToEntRef( jetf18 ), TIMER_REPEAT );
 				}
 			}
 		}
 	}
 	
 	// this guy using his dash to change position midair.
-	if ( g_PDClientLuffy[client].hLuffyStrength != INVALID_HANDLE )
+	if ( PDClientLuffy[client].iLuffyType == TYPE_STRENGTH )
 	{
-		if( !g_PDClientLuffy[client].bIsDoubleDashPaused )
+		if( !PDClientLuffy[client].bIsDoubleDashPaused )
 		{
 			// pressing 3 button, forward, left and space wont detected. :(
 			float direction = -1.0;
@@ -1294,31 +1023,26 @@ public Action OnPlayerRunCmd( int client, int& buttons, int& impulse, float vel[
 				float pos_start[3];
 				float pos_new[3];
 				float ang_start[3];
-				GetEntOrigin( client, pos_start, 10.0 );				// get our initial world pos for checking height, lift it 10 unit so it not on the ground.
-				GetEntAngle( client, ang_start, 90.0, AXIS_PITCH );		// get our initial world ang and turn it downside/pitch so it facing our leg for checking height
+				GetEntOrigin( client, pos_start, 0.0 );								// get our initial world pos for checking height, lift it 10 unit so it not on the ground.
+				float height = pos_start[2] - PDClientLuffy[client].fPosJump[2];
 				
 				// check our distance from the ground, acuracy not matter so we ignore the inital 10 unit
-				bool gotpos = TraceRayGetEndpoint( pos_start, ang_start, client, pos_new );
-				if( gotpos )
+				if( height >= DASH_HEIGHT )											// our distance is safe to dash around
 				{
-					if( GetVectorDistance( pos_start, pos_new ) >= DASH_HEIGHT )		// our distance is safe to dash around
-					{
-						GetEntOrigin( client, pos_start, 0.0 );							// get our initial world pos	<< or just reuse the old value
-						CopyArray3DF( pos_start, pos_new );								// copy or just get our initial world pos again so that we can manipulate later
-						GetEntAngle( client, ang_start, direction, AXIS_YAW );			// get our inital forward world angle plus the manipulated direction at yaw angle.
-						float radius = 100.0;											// roughly known/desired radius/distance surrounding us.
-						
-						// calculate where the intersection between known radius and known angle. final result is new endpoint/pos_new
-						pos_new[0] += radius * Cosine( DegToRad( ang_start[1] ));
-						pos_new[1] += radius * Sine( DegToRad( ang_start[1] ));
-						
-						float vec_new[3];
-						MakeVectorFromPoints( pos_start, pos_new, vec_new );			// get vector from the 2 points. location where we start to our new location.
-						NormalizeVector( vec_new, vec_new );							// always normalize when it is a vector.
-						ScaleVector( vec_new, DASH_FORCE );								// scale it to create force.
-						TeleportEntity( client, NULL_VECTOR, NULL_VECTOR, vec_new );	// push the guy.. walla... we dashing in midair.. :)
-						g_PDClientLuffy[client].bIsDoubleDashPaused = true;			// we dashed once, wait until we touch the ground. the check inside the strength timer.
-					}
+					CopyArray3DF( pos_start, pos_new );								// copy or just get our initial world pos again so that we can manipulate later
+					GetEntAngle( client, ang_start, direction, AXIS_YAW );			// get our inital forward world angle plus the manipulated direction at yaw angle.
+					float radius = 100.0;											// roughly known/desired radius/distance surrounding us.
+					
+					// calculate where the intersection between known radius and known angle. final result is new endpoint/pos_new
+					pos_new[0] += radius * Cosine( DegToRad( ang_start[1] ));
+					pos_new[1] += radius * Sine( DegToRad( ang_start[1] ));
+					
+					float vec_new[3];
+					MakeVectorFromPoints( pos_start, pos_new, vec_new );			// get vector from the 2 points. location where we start to our new location.
+					NormalizeVector( vec_new, vec_new );							// always normalize when it is a vector.
+					ScaleVector( vec_new, DASH_FORCE );								// scale it to create force.
+					TeleportEntity( client, NULL_VECTOR, NULL_VECTOR, vec_new );	// push the guy.. walla... we dashing in midair.. :)
+					PDClientLuffy[client].bIsDoubleDashPaused = true;				// we dashed once, wait until we touch the ground. the check inside the strength timer.
 				}
 			}
 		}
@@ -1326,72 +1050,7 @@ public Action OnPlayerRunCmd( int client, int& buttons, int& impulse, float vel[
 	return Plugin_Continue;
 }
 
-public Action Timer_JetF18Life( Handle timer, any entref ) //<< ok
-{
-	int jetf18 = EntRefToEntIndex( entref );
-	if( IsEntityValid( jetf18 ))
-	{
-		int client = GetOwner( jetf18 );
-		if ( IsValidSurvivor( client ))
-		{
-			if( g_bIsRoundStart )
-			{
-				g_PDClientLuffy[client].iClientMissile -= 1;
-				if( g_PDClientLuffy[client].iClientMissile > 0 )
-				{
-					PCMasterRace_Render_ARGB( client, SHIELD_DORM_ALPHA );	// that right.. you read that correctly
-					
-					float pos_client[3];
-					float clAng[3];
-					GetEntOrigin( client, pos_client, 130.0 );
-					GetEntAngle( client, clAng, 15.0, AXIS_PITCH );
-					TeleportEntity( jetf18, pos_client,  clAng , NULL_VECTOR );
-					
-					// launch missile here
-					float pos_start[3];
-					float pos_end[3];
-					float ang_start[3];
-					
-					GetClientEyePosition( client, pos_start );		// start pos of the missile
-					GetClientEyeAngles( client, ang_start );		// start angle of the missile
-					
-					bool gotpos = TraceRayGetEndpoint( pos_start, ang_start, client, pos_end );
-					if ( gotpos )
-					{
-						/// random missile start firing pos >>> near survivor owner of the missile
-						pos_start[0] += GetRandomFloat( -30.0, 30.0 );		//<<< random pos around player location.
-						pos_start[1] += GetRandomFloat( -30.0, 30.0 );		//<<< random pos around player location.
-						pos_start[2] += GetRandomFloat( 100.0, 130.0 );		//<<< always above player head
-						
-						/// random missile target pos
-						pos_end[0] += GetRandomFloat( -100.0, 100.0 );		//<<< scramble target pos. << for more accuracy zero the value
-						pos_end[1] += GetRandomFloat( -100.0, 100.0 );		//<<< scramble target pos. << for more accuracy zero the value
-						pos_end[2] += GetRandomFloat( -50.0, 50.0 );		//<<< scramble target pos. << for more accuracy zero the value
-						
-						int missile = CreateMissileProjectile( client, pos_start, pos_end );	// create a missile and shoot it.
-						if( missile != -1 )
-						{
-							ChangeDirectionAndShoot( missile, pos_end, MISSILE_TARGET_SPEED, -90.0 );	// -90.0 is the molotove body pitch correction
-						}
-						// if this missile dont hit anything, we kill it.
-						CreateTimer( HOMING_EXPIRE, Timer_MissileExplode, EntIndexToEntRef( missile ), TIMER_FLAG_NO_MAPCHANGE );
-					}
-					else
-					{
-						PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05Null aimed location!!" );
-					}
-					return Plugin_Continue;
-				}
-			}
-			EmitSoundToClient( client, SND_JETPASS );
-			g_PDClientLuffy[client].hAirStrike = INVALID_HANDLE;
-		}
-		RemoveEntity_KillHierarchy( jetf18 );
-	}
-	return Plugin_Stop;
-}
-
-int CreateMissileProjectile( int client, float pos_world_start[3], float pos_world_end[3] )	//<< ok
+int CreateMissileProjectile( int client, float pos_world_start[3], float pos_world_end[3] )
 {
 	// NOTE: We need the initial world position so the child entity created wont appear at world origin zero
 	// and teleport to his parent origin attachment. firing hundred of missile make the child moving from world origin 
@@ -1465,7 +1124,7 @@ void ChangeDirectionAndShoot( int entity, float pos_target[3], float speed, floa
 	TeleportEntity( entity, NULL_VECTOR, NULL_VECTOR, vecVel );
 }
 
-public Action Timer_MissileExplode( Handle timer, any entref )	//<< ok
+public Action Timer_MissileExplode( Handle timer, any entref )
 {
 	// our missile didnt hit anything, kill him.
 	int missile = EntRefToEntIndex( entref );
@@ -1556,7 +1215,7 @@ public Action Timer_MissileExplode( Handle timer, any entref )	//<< ok
 	}
 }
 
-public Action OnMissileTouch( int hooked_ent, int toucher )		//<< ok
+public Action OnMissileTouch( int hooked_ent, int toucher )
 {
 	if( IsValidSurvivor( toucher ))
 	{
@@ -1572,7 +1231,7 @@ public Action OnMissileTouch( int hooked_ent, int toucher )		//<< ok
 	return Plugin_Continue;
 }
 
-public Action OnLuffyObjectTouch( int hooked_ent, int toucher )	//<< ok   
+public Action OnLuffyObjectTouch( int hooked_ent, int toucher ) 
 {
 	if( IsValidSurvivor( toucher ))
 	{
@@ -1588,18 +1247,18 @@ public Action OnLuffyObjectTouch( int hooked_ent, int toucher )	//<< ok
 			GetEntPropString( child, Prop_Data, "m_ModelName", modelName, sizeof( modelName ));
 			if( StrEqual( modelName, g_sModelBuffer[ePOS_JETF18], false ))
 			{
-				if( g_PDClientLuffy[toucher].bAirStrike )
+				if( PDClientLuffy[toucher].bAirStrike )
 				{
 					PrintHintText( toucher, "++ Already Aquired Air Strike ++" );
 					return;
 				}
-				else if( g_PDClientLuffy[toucher].hAirStrike != INVALID_HANDLE )
+				else if( PDClientLuffy[toucher].hAirStrike != null )
 				{
 					PrintHintText( toucher, "++ Air Strike In Progress ++" );
 					return;
 				}
 			}
-			else if( StrEqual( modelName, g_sModelBuffer[ePOS_HOMING], false ) && g_PDClientLuffy[toucher].bHomingBTN )
+			else if( StrEqual( modelName, g_sModelBuffer[ePOS_HOMING], false ) && PDClientLuffy[toucher].bHomingBTN )
 			{
 				PrintHintText( toucher, "++ Already aquired Homing Missile ++" );
 				return;
@@ -1611,16 +1270,17 @@ public Action OnLuffyObjectTouch( int hooked_ent, int toucher )	//<< ok
 					PrintHintText( toucher, "-- You are healthy for Luffy Health --" );
 					return;
 				}
-				else if(  g_PDClientLuffy[toucher].hHealthRegen != INVALID_HANDLE )
+				else if(  PDClientLuffy[toucher].hHealthRegen != null )
 				{
 					PrintHintText( toucher, "-- You Still On Luffy Drug --" );
 					return;
 				}
 			}
 			else if( StrEqual( modelName, g_sModelBuffer[ePOS_CLOCK], false) || StrEqual( modelName, g_sModelBuffer[ePOS_SPEED], false) ||
-					 StrEqual( modelName, g_sModelBuffer[ePOS_SHIELD], false) || StrEqual( modelName, g_sModelBuffer[ePOS_STRENGTH], false )) {
-				if ( g_PDClientLuffy[toucher].hLuffyClock != INVALID_HANDLE || g_PDClientLuffy[toucher].hLuffySpeed != INVALID_HANDLE ||
-					 g_PDClientLuffy[toucher].hLuffyShield != INVALID_HANDLE || g_PDClientLuffy[toucher].hLuffyStrength != INVALID_HANDLE ) {
+					 StrEqual( modelName, g_sModelBuffer[ePOS_SHIELD], false) || StrEqual( modelName, g_sModelBuffer[ePOS_STRENGTH], false ))
+			{
+				if ( PDClientLuffy[toucher].iLuffyType != TYPE_NONE )
+				{
 					PrintHintText( toucher, "-- Luffy Ability Still Active --" );
 					return;
 				}
@@ -1632,7 +1292,7 @@ public Action OnLuffyObjectTouch( int hooked_ent, int toucher )	//<< ok
 				g_iLuffySpawnCount = 0;
 			}
 			
-			g_esLuffyDrop[hooked_ent].hTimer = INVALID_HANDLE;	//<< we dont kill the timer. the timer kill itself
+			delete EMLuffyDrop[hooked_ent].hTimer;
 			
 			SDKUnhook( hooked_ent, SDKHook_StartTouchPost, OnLuffyObjectTouch );
 			RemoveEntity_KillHierarchy( hooked_ent );
@@ -1641,43 +1301,42 @@ public Action OnLuffyObjectTouch( int hooked_ent, int toucher )	//<< ok
 	}
 }
 
-// all ability listed here for easy overview
-void RewardPicker( int client, const char[] mName ) //<< ok.
+// all ability listed here
+void RewardPicker( int client, const char[] mName )
 {
-	float scale = 0.0;
-	if ( StrEqual( mName, g_sModelBuffer[ePOS_CLOCK], false ))		// clock device
+	if ( StrEqual( mName, g_sModelBuffer[ePOS_CLOCK], false ))			// clock device
 	{
-		scale = g_fModelScale[ePOS_CLOCK];
-		RunLuffyClock( client );
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_CLOCK];
+		SetLuffyClock( client );
 	}
-	else if ( StrEqual( mName, g_sModelBuffer[ePOS_SPEED], false ))	// super speed
+	else if ( StrEqual( mName, g_sModelBuffer[ePOS_SPEED], false ))		// super speed
 	{
-		scale = g_fModelScale[ePOS_SPEED];
-		RunLuffySpeed( client );
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_SPEED];
+		SetLuffySpeed( client );
 	}
 	else if ( StrEqual( mName, g_sModelBuffer[ePOS_POISON], false ))	// luffy poison
 	{
-		scale = g_fModelScale[ePOS_POISON];
-		RunLuffyPunishment( client );
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_POISON];
+		SetLuffyPunishment( client );
 	}
-	else if ( StrEqual( mName, g_sModelBuffer[ePOS_REGEN], false))	// player HP
+	else if ( StrEqual( mName, g_sModelBuffer[ePOS_REGEN], false))		// player HP
 	{
-		scale = g_fModelScale[ePOS_REGEN];
-		RunLuffyHealth( client );
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_REGEN];
+		SetLuffyHealth( client );
 	}
-	else if ( StrEqual( mName, g_sModelBuffer[ePOS_SHIELD], false))	// player shield
+	else if ( StrEqual( mName, g_sModelBuffer[ePOS_SHIELD], false))		// player shield
 	{
-		scale = g_fModelScale[ePOS_SHIELD];
-		RunLuffyShield( client );
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_SHIELD];
+		SetLuffyShield( client );
 	}
 	else if ( StrEqual( mName, g_sModelBuffer[ePOS_STRENGTH], false))	//super strength
 	{
-		scale = g_fModelScale[ePOS_STRENGTH];
-		RunLuffyStrength( client );
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_STRENGTH];
+		SetLuffyStrength( client );
 	}
-	else if ( StrEqual( mName, g_sModelBuffer[ePOS_GIFT], false ))	// reward T2 weapon and give his primary weapon double ammo << now that sound rewarding.
-	{																// not rewarding enough? Drop also random health buff. Still not rewarding? you greed af.
-		scale = g_fModelScale[ePOS_GIFT];
+	else if ( StrEqual( mName, g_sModelBuffer[ePOS_GIFT], false ))		// reward T2 weapon and give his primary weapon double ammo << now that sound rewarding.
+	{																	// not rewarding enough? Drop also random health buff. Still not rewarding? you greed af.
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_GIFT];
 		DropRandomWeapon( client, WEAPON_TIER2 );
 		RestockPrimaryAmmo( client, 2 );
 		switch( GetRandomInt( 0, 2 ))
@@ -1687,10 +1346,10 @@ void RewardPicker( int client, const char[] mName ) //<< ok.
 			case 2:	{ GivePlayerItems( client, "weapon_adrenaline" );	}
 		}
 	}
-	else if ( StrEqual( mName, g_sModelBuffer[ePOS_HOMING], false))	// homing missile
+	else if ( StrEqual( mName, g_sModelBuffer[ePOS_HOMING], false))		// homing missile
 	{
-		scale = g_fModelScale[ePOS_HOMING];
-		g_PDClientLuffy[client].bHomingBTN = true;
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_HOMING];
+		PDClientLuffy[client].bHomingBTN = true;
 		switch( GetRandomInt( 1, 3 ))
 		{
 			case 1:
@@ -1712,10 +1371,10 @@ void RewardPicker( int client, const char[] mName ) //<< ok.
 		}
 		PrintHintText( client, "++ Get Ammo Box And Deploy It ++" );
 	}
-	else if ( StrEqual( mName, g_sModelBuffer[ePOS_JETF18], false))	// air strike
+	else if ( StrEqual( mName, g_sModelBuffer[ePOS_JETF18], false))		// air strike
 	{
-		scale = g_fModelScale[ePOS_JETF18];
-		g_PDClientLuffy[client].bAirStrike = true;
+		PDClientLuffy[client].fScale = g_fModelScale[ePOS_JETF18];
+		PDClientLuffy[client].bAirStrike = true;
 		switch( GetRandomInt( 1, 3 ))
 		{
 			case 1:
@@ -1748,39 +1407,19 @@ void RewardPicker( int client, const char[] mName ) //<< ok.
 		ang[0] = 0.0;
 		
 		// just ordinary model animation. hacky way but it works. we emulate model scaling
-		int skin = CreatEntRenderModel( PROPTYPE_DYNAMIC, mName, pos, ang, scale );
+		int skin = CreatEntRenderModel( PROPTYPE_DYNAMIC, mName, pos, ang, PDClientLuffy[client].fScale );
 		if ( skin != -1 )
 		{
 			SetRenderColour( skin, g_iColor_White, 80 );
-			g_fSkinAnimeScale[skin] = scale;
+			g_fSkinAnimeScale[skin] = PDClientLuffy[client].fScale;
 			g_iSkinAnimeCount[skin] = 1;
 			CreateTimer( 0.1, Timer_PlayLuffyPickupAnimation, EntIndexToEntRef( skin ), TIMER_REPEAT );
 		}
 	}
 }
 
-public Action Timer_PlayLuffyPickupAnimation( Handle timer, any entref )
-{
-	int entity = EntRefToEntIndex( entref );
-	if( entity > MaxClients )
-	{
-		if( g_bIsRoundStart && g_iSkinAnimeCount[entity] > 0 && g_iSkinAnimeCount[entity] <= ANIMATION_COUNT )
-		{
-			SetEntPropFloat( entity, Prop_Send, "m_flModelScale", g_fSkinAnimeScale[entity] );
-			g_fSkinAnimeScale[entity] *= 1.2;
-			g_iSkinAnimeCount[entity] += 1;
-			return Plugin_Continue;
-		}
-		
-		g_iSkinAnimeCount[entity] = 0;
-		g_fSkinAnimeScale[entity] = 0.0;
-		RemoveEntity_Kill( entity );
-	}
-	return Plugin_Stop;
-}
-
-// new and old melee weapon still not available. << got time search for the weapon cl name????
-public void EVENT_UpgradePackUsed( Event event, const char[] name, bool dontBroadcast )  //<< ok == launch homing missile here.
+// new and old melee weapon still not available.
+public void EVENT_UpgradePackUsed( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 	
@@ -1790,15 +1429,15 @@ public void EVENT_UpgradePackUsed( Event event, const char[] name, bool dontBroa
 	{
 		bool destroy = true;
 		
-		if( !g_PDClientLuffy[client].bHomingBTN )
+		if( !PDClientLuffy[client].bHomingBTN )
 		{
 			if( g_bAllowAmmoboxTweak )
 			{
 				// for first time usage, value always zero mean let player have the ammobox.
-				switch( g_PDClientLuffy[client].iClientDice[0] )
+				switch( PDClientLuffy[client].iClientDice[0] )
 				{
 					case 1:  { DropRandomWeapon( client, WEAPON_TIER1 );					}
-					case 2:	 { RunFreezeClient( client );									}
+					case 2:	 { SetFreeze( client );									}
 					case 3:	 { GivePlayerItems( client, "weapon_pipe_bomb" );				}
 					case 4:	 { GivePlayerItems( client, "weapon_molotov" );					}
 					case 5:	 { GivePlayerItems( client, "weapon_vomitjar" );				}
@@ -1812,10 +1451,10 @@ public void EVENT_UpgradePackUsed( Event event, const char[] name, bool dontBroa
 					case 13: { CheatCommand( client, "director_force_panic_event", "" );	}
 					case 14: { GivePlayerItems( client, "upgrade_laser_sight" );			}
 					case 15: { GivePlayerItems( client, "weapon_ammo_spawn" );				}
-					case 16: { RewardTeleport( client, "Survivor" );						}
-					case 17: { RewardTeleport( client, "Witch" );							}
-					case 18: { RewardTeleport( client, "Tank" );							}
-					case 19: { RunLuffyHealth( client );									}
+					case 16: { SetTeleport( client, "Survivor" );						}
+					case 17: { SetTeleport( client, "Witch" );							}
+					case 18: { SetTeleport( client, "Tank" );							}
+					case 19: { SetLuffyHealth( client );									}
 					case 20: { DropRandomWeapon( client, WEAPON_TIER1 );					}
 					case 21: { if ( g_bAllowMessage == true ) { PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You got empty box!!" ); }}
 					default : {	destroy = false; }  /*<< give him the ammobox*/
@@ -1847,52 +1486,7 @@ public void EVENT_UpgradePackUsed( Event event, const char[] name, bool dontBroa
 	}
 }
 
-public Action Timer_RollAmmoboxDice( Handle timer, any userid )
-{
-	int client = GetClientIndex( userid, true );
-	if( IsValidSurvivor( client ))
-	{
-		g_PDClientLuffy[client].iRollRandomDice();
-	}
-}
-
-void RunHomingMissile( int client, int ammobox ) //<< ok
-{
-	float boxpos[3];
-	float boxang[3];
-	GetEntOrigin( ammobox, boxpos, 0.0 );
-	GetEntAngle( ammobox, boxang, 0.0, 0 );
-
-	// lunch missile.....
-	int entity = CreatEntRenderModel( PROPTYPE_DYNAMIC, g_sModelBuffer[ePOS_HOMING], boxpos, boxang, 2.0 );
-	if( entity != -1 )
-	{
-		SetOwner( entity, client );
-		
-		int  miss = g_iHomingNum;
-		if( !g_bBypassMissileCap )
-		{
-			if ( miss < 1 ) miss = 1;
-			if ( miss > 1000 ) miss = 1000;
-		}
-		
-		float diff = 0.0;
-		for( int i = 1; i <= miss; i ++ )
-		{
-			CreateTimer( diff, Timer_HomingBaseLaunch, EntIndexToEntRef( entity ), TIMER_FLAG_NO_MAPCHANGE );
-			diff += HOMING_INTERVAL;
-		}
-		
-		diff += 2.0;
-		CreateTimer( diff, Timer_HomingBaseLife, EntIndexToEntRef( entity ), TIMER_FLAG_NO_MAPCHANGE );
-		
-		// track our HomingBase z pos.
-		g_fHomingBaseHeight[entity] = boxpos[2];
-		g_PDClientLuffy[client].bHomingBTN = false;
-	}
-}
-
-public Action Timer_HomingBaseLife( Handle timer, any entref )	//<< ok
+public Action Timer_HomingBaseLife( Handle timer, any entref )
 {
 	int base = EntRefToEntIndex( entref );
 	if( base > MaxClients )
@@ -1901,7 +1495,7 @@ public Action Timer_HomingBaseLife( Handle timer, any entref )	//<< ok
 	}
 }
 
-public Action Timer_HomingBaseLaunch( Handle timer, any entref )	//<< ok
+public Action Timer_HomingBaseLaunch( Handle timer, any entref )
 {
 	int entity = EntRefToEntIndex( entref );
 	if( entity > MaxClients )
@@ -1951,7 +1545,7 @@ public Action Timer_HomingBaseLaunch( Handle timer, any entref )	//<< ok
 	}
 }
 
-public Action Timer_HomingMissileHoming( Handle timer, any entref )	//<< ok
+public Action Timer_HomingMissileHoming( Handle timer, any entref )
 {
 	int missile = EntRefToEntIndex( entref );
 	if( missile > MaxClients )
@@ -2075,31 +1669,7 @@ public Action Timer_HomingMissileHoming( Handle timer, any entref )	//<< ok
 	return Plugin_Stop;
 }
 
-int HomingCompareTarget( int missile, int target )		//<< ok
-{
-	int base = EntRefToEntIndex( g_iHomingBaseOwner[missile] );
-	if( base > MaxClients )
-	{
-		// check if the target not targeted. return -1 for already targeted.
-		for( int j = 0; j < sizeof( g_iHomingBaseTarget[] ); j++ )
-		{
-			if( g_iHomingBaseTarget[base][j] != -1 )
-			{
-				if( g_iHomingBaseTarget[base][j] == target )
-				{
-					return -1;
-				}
-			}
-		}
-	}
-	return target;
-}
-
-/////////////////////////////////////////////////////////////////////////
-/////////////////////// Luffy RPG END HERE //////////////////////////////
-/////////////////////////////////////////////////////////////////////////
-
-public void EVENT_ReviveSuccsess( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_ReviveSuccsess( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable || !g_bAllowHealAnimate ) return;
 
@@ -2108,17 +1678,17 @@ public void EVENT_ReviveSuccsess( Event event, const char[] name, bool dontBroad
 	if( IsValidSurvivor( client ))
 	{
 		bool isledge = event.GetBool( "ledge_hang" );
-		if( isledge && g_PDClientLuffy[client].bIsHPInterrupted )
+		if( isledge && PDClientLuffy[client].bIsHPInterrupted )
 		{
-			g_PDClientLuffy[client].bIsHPInterrupted = false;
-			SetPlayerHealth( client, g_PDClientLuffy[client].iCleintHPHealth );
-			SetPlayerHealthBuffer( client, g_PDClientLuffy[client].fCleintHPBuffer );
-			g_PDClientLuffy[client].hHealthRegen = CreateTimer( 0.1, Timer_LuffyHealth, userid, TIMER_REPEAT );
+			PDClientLuffy[client].bIsHPInterrupted = false;
+			SetPlayerHealth( client, PDClientLuffy[client].iCleintHPHealth );
+			SetPlayerHealthBuffer( client, PDClientLuffy[client].fCleintHPBuffer );
+			PDClientLuffy[client].hHealthRegen = CreateTimer( 0.1, Timer_LuffyHealth, userid, TIMER_REPEAT );
 		}
 	}
 }
 
-public void EVENT_PlayerUse( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_PlayerUse( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 	
@@ -2164,7 +1734,7 @@ public void EVENT_UpgradePackAdded( Event event, const char[] name, bool dontBro
 	}
 }
 
-public void EVENT_PlayerHurt( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_PlayerHurt( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 	
@@ -2172,14 +1742,14 @@ public void EVENT_PlayerHurt( Event event, const char[] name, bool dontBroadcast
 	int  attacker	= GetClientOfUserId( event.GetInt( "attacker" ));
 	if ( IsValidInfected( client ) && IsValidSurvivor( attacker ))
 	{
-		if ( g_PDClientLuffy[attacker].hLuffyShield != INVALID_HANDLE || g_PDClientLuffy[attacker].hLuffyClock != INVALID_HANDLE )
+		if ( PDClientLuffy[attacker].iLuffyType == TYPE_SHIELD )
 		{
 			SetupBloodSpark( client );
 		}
 	}
 }
 
-public void EVENT_InfectedHurt( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_InfectedHurt( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable ) return;
 	
@@ -2187,7 +1757,7 @@ public void EVENT_InfectedHurt( Event event, const char[] name, bool dontBroadca
 	int  attacker = GetClientOfUserId( event.GetInt( "attacker" ));
 	if ( IsValidSurvivor( attacker ) && infected > MaxClients && IsValidEntity( infected ))
 	{
-		if ( g_PDClientLuffy[attacker].hLuffyShield != INVALID_HANDLE || g_PDClientLuffy[attacker].hLuffyClock != INVALID_HANDLE )
+		if ( PDClientLuffy[attacker].iLuffyType == TYPE_SHIELD )
 		{
 			char className[16];
 			GetEntityClassname( infected, className, sizeof( className ));
@@ -2203,7 +1773,17 @@ public void EVENT_InfectedHurt( Event event, const char[] name, bool dontBroadca
 	}
 }
 
-public void EVENT_HealBegin( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_PlayerJump( Event event, const char[] name, bool dontBroadcast )
+{
+	int userid = event.GetInt( "userid" );
+	int client = GetClientOfUserId( userid );
+	if( IsValidSurvivor( client ))
+	{
+		GetEntOrigin( client, PDClientLuffy[client].fPosJump, 0.0 );
+	}
+}
+
+public void EVENT_HealBegin( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable || !g_bAllowHealAnimate ) return;
 	
@@ -2212,17 +1792,17 @@ public void EVENT_HealBegin( Event event, const char[] name, bool dontBroadcast 
 	{
 		// lets animate the heal.
 		// capture player health and health buffer from pill or syrange
-		g_PDClientLuffy[client].bIsHPInterrupted = false;
-		g_PDClientLuffy[client].iCleintHPHealth = GetPlayerHealth( client );
-		g_PDClientLuffy[client].fCleintHPBuffer = GetPlayerHealthBuffer( client );
-		if ( g_PDClientLuffy[client].iCleintHPHealth < 10 )
+		PDClientLuffy[client].bIsHPInterrupted = false;
+		PDClientLuffy[client].iCleintHPHealth = GetPlayerHealth( client );
+		PDClientLuffy[client].fCleintHPBuffer = GetPlayerHealthBuffer( client );
+		if ( PDClientLuffy[client].iCleintHPHealth < 10 )
 		{
-			g_PDClientLuffy[client].iCleintHPHealth = 10;
+			PDClientLuffy[client].iCleintHPHealth = 10;
 		}
 	}
 }
 
-public void EVENT_HealSuccess( Event event, const char[] name, bool dontBroadcast ) //<< ok
+public void EVENT_HealSuccess( Event event, const char[] name, bool dontBroadcast )
 {
 	if ( !g_bLuffyEnable || !g_bAllowHealAnimate ) return;
 	
@@ -2230,908 +1810,233 @@ public void EVENT_HealSuccess( Event event, const char[] name, bool dontBroadcas
 	int client = GetClientOfUserId( userid );
 	if ( IsValidSurvivor( client ))
 	{
-		if ( g_PDClientLuffy[client].iCleintHPHealth > 0 )
+		if ( PDClientLuffy[client].iCleintHPHealth > 0 )
 		{
 			// restore the health and healt buffer we capture earlier
-			SetPlayerHealth( client, g_PDClientLuffy[client].iCleintHPHealth );
-			SetPlayerHealthBuffer( client, g_PDClientLuffy[client].fCleintHPBuffer );
+			SetPlayerHealth( client, PDClientLuffy[client].iCleintHPHealth );
+			SetPlayerHealthBuffer( client, PDClientLuffy[client].fCleintHPBuffer );
 			
-			g_PDClientLuffy[client].bIsHPInterrupted = false;
-			g_PDClientLuffy[client].hHealthRegen	= CreateTimer( 0.1, Timer_LuffyHealth, userid, TIMER_REPEAT );
-			g_PDClientLuffy[client].iCleintHPHealth	= 0;
-			g_PDClientLuffy[client].fCleintHPBuffer	= 0.0;
+			PDClientLuffy[client].bIsHPInterrupted = false;
+			PDClientLuffy[client].hHealthRegen	= CreateTimer( 0.1, Timer_LuffyHealth, userid, TIMER_REPEAT );
+			PDClientLuffy[client].iCleintHPHealth	= 0;
+			PDClientLuffy[client].fCleintHPBuffer	= 0.0;
 		}
 	}
 }
 
-public Action Timer_LuffyHealth( Handle timer, any userid ) //<< ok ====== lazy arse >> check legde grab and incap( we not entirely sure what happen during the animation )
-{
-	int client = GetClientIndex( userid, true );
-	if ( IsValidSurvivor( client ))
-	{
-		if( IsPlayerAlive( client ))
-		{
-			int health = GetPlayerHealth( client );
-			if( g_bIsRoundStart && health < g_iHPregenMax )
-			{
-				// // player not incap or ledge grab during animation, safe to continue
-				if( !IsPlayerLedge( client ) && !IsPlayerIncap( client ))
-				{
-					g_PDClientLuffy[client].iCleintHPHealth = health + 1;
-					g_PDClientLuffy[client].fCleintHPBuffer = 100.0 - float( g_PDClientLuffy[client].iCleintHPHealth );			// make sure our health dont exceed 100
-					SetPlayerHealthBuffer( client, g_PDClientLuffy[client].fCleintHPBuffer );
-					SetPlayerHealth( client, g_PDClientLuffy[client].iCleintHPHealth );
-					return Plugin_Continue;
-				}
-				
-				if( IsPlayerIncap( client ))
-				{
-					// mark player as hp regen intruppted
-					g_PDClientLuffy[client].bIsHPInterrupted = true;
-				}
-			}
-			
-			if( !g_PDClientLuffy[client].bIsHPInterrupted )
-			{
-				SetPlayerHealthBuffer( client, 0.0 );
-				SetPlayerHealth( client, 100 );
-				ResetPlayerLifeCount( client );
-				EmitSoundToClient( client, SND_TIMEOUT );
-				g_PDClientLuffy[client].iCleintHPHealth = 0;
-				g_PDClientLuffy[client].fCleintHPBuffer = 0.0;
-			}
-		}
-		g_PDClientLuffy[client].hHealthRegen = INVALID_HANDLE;
-	}
-	return Plugin_Stop;
-}
 
-public Action Timer_RestoreCollution( Handle timer, any userid ) //<< ok
+/////////////////////////////////////////////////////////////
+//======================= Function ========================//
+/////////////////////////////////////////////////////////////
+void RunHomingMissile( int client, int ammobox )
 {
-	int client = GetClientIndex( userid, true );
-	if ( IsValidSurvivor( client )) 
-	{
-		SetEntityMoveType( client, MOVETYPE_WALK );
-	}
-}
+	float boxpos[3];
+	float boxang[3];
+	GetEntOrigin( ammobox, boxpos, 0.0 );
+	GetEntAngle( ammobox, boxang, 0.0, 0 );
 
-// update: havent tested this since the first release v0.0 //<<Update: this should work but is cheating. //<update: its single player dangit
-void CreateShieldPush( int client, int target, float force )	/// those teleport need simplified
-{
-	float pos_client[3];
-	float pos_target[3];
-	float vel_target[3];
-	float ang_target[3];
-	GetEntOrigin( client, pos_client, 0.0 );
-	GetEntOrigin( target, pos_target, 0.0 );
-	
-	MakeVectorFromPoints( pos_client, pos_target, vel_target );
-	GetVectorAngles( vel_target, ang_target );
-	ang_target[0] -= 20.0;					// redirect him to the air, slightly
-	GetAngleVectors( ang_target, vel_target, NULL_VECTOR, NULL_VECTOR);	// recalculate the velocity.
-	NormalizeVector( vel_target, vel_target );
-	ScaleVector( vel_target, force );
-	TeleportEntity( target, NULL_VECTOR, NULL_VECTOR, vel_target );
-	
-	if( target <= MaxClients )
+	// lunch missile.....
+	int entity = CreatEntRenderModel( PROPTYPE_DYNAMIC, g_sModelBuffer[ePOS_HOMING], boxpos, boxang, 2.0 );
+	if( entity != -1 )
 	{
-		// if we cant push them, then kill the attacker
-		bool isluck = false;
-		if ( GetEntProp( client, Prop_Send, "m_tongueOwner" ) > 0 && GetZclass( target ) == ZOMBIE_SMOKER )
+		SetOwner( entity, client );
+		
+		int  miss = g_iHomingNum;
+		if( !g_bBypassMissileCap )
 		{
-			isluck = true;
-			SetEntityMoveType( target, MOVETYPE_NOCLIP );
-			CreateTimer( 0.1, Timer_RestoreCollution, GetClientIndex( target, false ));
-		}
-		else if( GetEntPropEnt( client, Prop_Send, "m_pounceAttacker" ) > 0 && GetZclass( target ) == ZOMBIE_CHARGER )
-		{
-			isluck = true;
-			CheatCommand( target, "kill", "" );
-		}
-		else if ( GetEntPropEnt( client, Prop_Send, "m_jockeyAttacker" ) > 0 && GetZclass( target ) == ZOMBIE_JOCKEY )
-		{
-			isluck = true;
-			CheatCommand( target, "dismount", "" );
+			if ( miss < 1 ) miss = 1;
+			if ( miss > 1000 ) miss = 1000;
 		}
 		
-		if( isluck )
+		float diff = 0.0;
+		for( int i = 1; i <= miss; i ++ )
 		{
-			EmitSoundToClient( client, SND_HEALTH );
-			if ( g_bHinttext )
-			{
-				PrintHintText( client, "++ You freed from %N ++", target );
-			}
+			CreateTimer( diff, Timer_HomingBaseLaunch, EntIndexToEntRef( entity ), TIMER_FLAG_NO_MAPCHANGE );
+			diff += HOMING_INTERVAL;
 		}
-	}
-	
-	// this is the section causing player screen to black out for the dying animation loop and cause them stuck with it untill client game restart.
-	// never occour to me that someone actualy have the balls to stand on top of 10 boxes of fire cracker next to 10 gallon of gascan stack together.
-	// we are going to fix him with 200 health buff aka half god mode. << in theory, this bug only happen to clock ability since the shield practilly immortal/god mode.
-	if ( IsPlayerIncap( client ))
-	{
-		ResetPlayerIncap( client );
-		CheatCommand( client, "give", "health" );
-		SetPlayerHealthBuffer( client, 200.0 );		// give himm 200 health buff to break the incap loop. 100 buff will do but 20 flameable prop give us a lil concern.
-		SetPlayerHealth( client, 1 );
-		PrintHintText( client, "++ You recovered from Incap ++" );
-	}
-	else if(  IsPlayerLedge( client ))
-	{
-		ResetPlayerLedge( client );
+		
+		diff += 2.0;
+		CreateTimer( diff, Timer_HomingBaseLife, EntIndexToEntRef( entity ), TIMER_FLAG_NO_MAPCHANGE );
+		
+		// track our HomingBase z pos.
+		g_fHomingBaseHeight[entity] = boxpos[2];
+		PDClientLuffy[client].bHomingBTN = false;
 	}
 }
 
-void RewardTeleport( int client, const char[] who ) //<< ok
+void RollLuffyDropDice( int client )
 {
-	// if my memory serve me well, the witch and/or Tank in the map cause problem to our plugin. Cant recall what it is.
-	// comment this out and debug yourself to findout.
-	if ( StrContains( g_sCURRENT_MAP, "c5m2", false ) != -1 )
-	{
-		if ( StrEqual( who, "Witch", false ) || StrEqual( who, "Tank", false ))
-		{
-			if ( g_bHinttext )
-			{
-				PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You found \x05Empty Luffy!!" );
-			}
-			return;
-		}
-	}
+	int drop = true;
+	float pos_infected[3];
+	float pos_survivor[3];
+	GetEntOrigin( client, pos_infected, 0.0 );
 	
-	int  scan = -1;
-	
-	if ( StrEqual( who, "Tank", false ))
+	// drop luffy item unless its too close to survivor
+	for ( int  i = 1; i <= MaxClients; i ++ )
 	{
-		for ( int  i = 1; i <= MaxClients; i++ )
+		if ( IsValidSurvivor( i ))
 		{
-			if ( IsValidInfected( i ) && IsPlayerAlive( i ))
+			GetEntOrigin( i, pos_survivor, 0.0 );
+			if ( GetVectorDistance( pos_infected, pos_survivor ) <= 30.0 )
 			{
-				if ( GetZclass( i ) == ZOMBIE_TANK )
-				{
-					scan = i;
-					break;
-				}
-			}
-		}
-	}
-	else if ( StrEqual( who, "Witch", false ))
-	{
-		char _name[64];
-		int  _max	= GetEntityCount();
-		for ( int  i = MaxClients; i <= _max; i++ )
-		{
-			if ( IsValidEntity( i ))
-			{
-				GetEntityClassname( i, _name, sizeof( _name ));
-				if ( StrContains( _name, "witch", false) != -1 )
-				{
-					//if ( GetEntProp( i, Prop_Data, "m_iHealth" ) > 1 )	//<< this could be wrong/crashing the server <<< note to self >> test this
-					//{														// update: ya.. checked my witch plugins, it will crash the server.
-						scan = i;											// so we dont check her health... just teleport.
-						break;
-					//}
-				}
-			}
-		}
-	}
-	else if ( StrEqual( who, "Infected", false ))
-	{
-		for ( int  i = MaxClients; i <= 1; i-- )
-		{
-			if ( IsValidInfected( i ) && IsPlayerAlive( i ))
-			{
-				scan = i;
-				break;
-			}
-		}
-	}
-	else if ( StrEqual( who, "Survivor", false ))
-	{
-		for ( int  i = 1; i <= MaxClients; i++ )
-		{
-			if ( IsValidSurvivor( i ) && i != client )
-			{
-				scan = i;
+				if( IsFakeClient( i ) && !g_bAllowBotPickUp ) { continue ;}
+
+				drop = false;
 				break;
 			}
 		}
 	}
 
-	if ( scan == -1 )
+	if ( drop && GetRandomInt( 1, 100 ) <= g_iLuffyChance )
 	{
+		// option 1 = drop luffy item with selected model type.
+		// option 2 = drop luffy item with random model type.
+		// option 3 = drop ammobox. << this should have lifespan to prevent our server from flooded with ammobox.
+
+		int modeltype		= 0;
+		bool israndommodel	= true;
+		bool candropluffy	= false;
 		
-		if ( StrContains( who, "Survivor", false ) != -1 )
-		{
-			switch( GetRandomInt( 1, 3 ))
-			{
-				case 1: { GivePlayerItems( client, "weapon_defibrillator" );	}
-				case 2: { GivePlayerItems( client, "weapon_pain_pills" );		}
-				case 3: { GivePlayerItems( client, "weapon_adrenaline" );		}
-			}
-		}
-		// we cant teleport him to tank, witch or infected, give him 1 instead.
-		else if ( StrContains( who, "Tank", false ) != -1 )
-		{
-			CheatCommand( client, "z_spawn", "tank auto" );						// we cant teleport him to the tank, then give tank next to him.
-		}
-		else if ( StrContains( who, "Witch", false ) != -1 )
-		{
-			CheatCommand( client, "z_spawn", "witch auto" );					// we cant teleport him to the witch, then give witch next to him.
-		}
-		else if ( StrContains( who, "Infected", false ) != -1 )
-		{
-			switch( GetRandomInt( 1, 6 ))
-			{
-				case 1: { CheatCommand( client, "z_spawn", "smoker auto" ); }	// we cant teleport him to any SI, then give 1 next to him.
-				case 2: { CheatCommand( client, "z_spawn", "boomer auto" ); }
-				case 3: { CheatCommand( client, "z_spawn", "hunter auto" ); }
-				case 4: { CheatCommand( client, "z_spawn", "spitter auto" ); }
-				case 5: { CheatCommand( client, "z_spawn", "jockey auto" ); }
-				case 6: { CheatCommand( client, "z_spawn", "charger auto" ); }
-			}
-		}
-	}
-	else
-	{
-		float _location[3];
-		GetEntOrigin( scan, _location, 10.0 );
-		TeleportEntity( client, _location, NULL_VECTOR, NULL_VECTOR );
-		EmitSoundToClient( client, SND_TELEPORT );
+		// determind which luffy drop type we get.
+		// this while loop with GetRandomInt inside is damn expensive.
+		// to avoid this we need timer to free this death event from while loop. 
+		// but that gonna drag our drop interval chance between kill a bit longer. << not gonna do timer for this. i m done saving just a fraction of server preformance improvement.
+		// update: for fakkk shake just do a random interger without while loop.... << Note to self >> do this next time you make an update.
+		// update2: problem is we getting almost same chances every time. the random interger is not really random. << get a decision on this.
 		
-		if ( g_bHinttext )
+		while( g_iDropSelectionType[0] == g_iDropSelectionType[1] || g_iDropSelectionType[0] == g_iDropSelectionType[2] )
 		{
-			PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy %s Teleport.", who );
+			g_iDropSelectionType[0] = GetRandomInt( 1, 5 );
 		}
-	}
-}
-
-void RunLuffyHealth( int client ) //<< ok
-{
-	EmitSoundToClient( client, SND_HEALTH );
-	g_PDClientLuffy[client].bIsHPInterrupted = false;
-	g_PDClientLuffy[client].hHealthRegen = CreateTimer( 0.1, Timer_LuffyHealth, GetClientIndex( client, false ), TIMER_REPEAT );
-	if ( g_bHinttext )
-	{
-		PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Health" );
-	}
-}
-
-void RunLuffyClock( int client ) //<< ok color = yellow
-{
-	int shield = SetupShield( client, SHIELD_TYPE_PUSH, 1 );
-	if( shield != -1 )
-	{
-		EmitSoundToClient( client, SND_CLOCK );
-		g_PDClientLuffy[client].iHintCountdown = g_iClockCoolDown;
-		g_PDClientLuffy[client].fAbilityCountdown = float( g_iClockCoolDown );
-		g_PDClientLuffy[client].fClientTimeBuffer = GetGameTime();
-		SetRenderColour( client, g_iColor_Yellow, 220 );
+		g_iDropSelectionType[2] = g_iDropSelectionType[1];
+		g_iDropSelectionType[1] = g_iDropSelectionType[0];
 		
-		int userid = GetClientIndex( client, false );
-		g_PDClientLuffy[client].hLuffyClock = CreateTimer( 0.1, Timer_LuffyClock, userid, TIMER_REPEAT );
-		
-		if ( g_bHinttext )
+		if( g_iDropSelectionType[0] > 3 )
 		{
-			PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Clock" );
-			PrintHintText( client, "++ Luffy Clock last in %d sec ++", g_iClockCoolDown );
+			modeltype		= g_iLuffyModelSelection[0];
+			israndommodel	= false;	// this drop type not a random model
+			candropluffy	= true;		// we allowed to drop luffy item
 		}
-	}
-}
-
-public Action Timer_LuffyClock( Handle timer, any userid ) //<< ok this have shield
-{
-	int client = GetClientIndex( userid, true );
-	if ( IsValidSurvivor( client ))
-	{
-		if( IsPlayerAlive( client ) && g_bIsRoundStart )
+		else if( g_iDropSelectionType[0] == 3 )
 		{
-			g_PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
-			if( g_PDClientLuffy[client].fAbilityCountdown > 0.0 )
-			{
-				SetupShieldDorm( client, g_iColor_Yellow, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
-				
-				float pos_client[3];
-				GetEntOrigin( client, pos_client, 20.0 );
-
-				int shield = EntRefToEntIndex( g_PDClientLuffy[client].iPlayerShield );
-				if( shield != -1 )
-				{
-					float currAng[3];
-					GetEntAngle( shield, currAng, 20.0, AXIS_YAW );
-					BoundAngleValue( currAng, currAng, 360.0, AXIS_YAW );			// prevent number from going huge
-					
-					if ( g_iShieldType == 1 )
-					{
-						TeleportEntity( shield, pos_client, currAng, NULL_VECTOR );
-					}
-					else
-					{
-						TeleportEntity( shield, NULL_VECTOR, currAng, NULL_VECTOR );
-					}
-				}
-				
-				float pos_target[3];
-				char className[128];
-				int  count_mdl = GetEntityCount();
-				for ( int  i = 1; i <= count_mdl; i++ )
-				{
-					if ( i <= MaxClients )
-					{
-						if ( IsValidInfected( i ) && IsPlayerAlive( i ))
-						{
-							GetEntOrigin( i, pos_target, 20.0 );
-							if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
-							{
-								CreatePointHurt( client, i, 1, DAMAGE_EXPLOSIVE, pos_target, SHIELD_RADIUS );	// do 1 damage to tell the infected who is responsible for tackling his armpits.
-								CreateShieldPush( client, i, SHIELD_PUSHCLOCK );								// we dont kill him, just push him harder
-							}
-						}
-					}
-					else
-					{
-						if ( IsValidEntity( i ))
-						{
-							GetEntityClassname( i, className, sizeof( className ));
-							if ( StrEqual( className, "infected", false ) || StrEqual( className, "witch", false ))
-							{
-								GetEntOrigin( i, pos_target, 20.0 );
-								if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
-								{
-									CreatePointHurt( client, i, 1, DAMAGE_EXPLOSIVE, pos_target, SHIELD_RADIUS ); 	// do 1 damage to tell the witch who is responsible for tackling his armpits.
-									CreateShieldPush( client, i, SHIELD_PUSHCLOCK );								// we dont kill him, just push him harder
-								}
-							}
-						}
-					}
-				}
-				
-				if( g_bHinttext )
-				{
-					//calculate how long time has pass since we display our hint message
-					float time = GetGameTime();
-					float shif = time - g_PDClientLuffy[client].fClientTimeBuffer;
-					if( shif >= 1.0 )
-					{
-						g_PDClientLuffy[client].iHintCountdown -= 1;
-						g_PDClientLuffy[client].fClientTimeBuffer = time;
-					}
-					
-					if( g_bAllowCountdownMsg || g_PDClientLuffy[client].iHintCountdown == 3 || g_PDClientLuffy[client].iHintCountdown == 10 || g_PDClientLuffy[client].iHintCountdown == 20 )
-					{
-						PrintHintText( client, "++ Luffy Clock last in %d sec ++", g_PDClientLuffy[client].iHintCountdown );
-					}
-				}
-				return Plugin_Continue;
-			}
-		}
-		
-		EmitSoundToClient( client, SND_TIMEOUT );
-		ResetLuffyAbility( client );
-		
-		if ( g_bHinttext )
-		{
-			PrintHintText( client, "-- Luffy Clock time out --" );
-		}
-	}
-	return Plugin_Stop;
-}
-
-void RunLuffySpeed( int client ) //<< ok color = blue
-{
-	EmitSoundToClient( client, SND_SPEED );
-	g_PDClientLuffy[client].iHintCountdown = g_iSpeedCoolDown;
-	g_PDClientLuffy[client].fAbilityCountdown = float( g_iSpeedCoolDown );
-	g_PDClientLuffy[client].fClientTimeBuffer = GetGameTime();
-	
-	float speed = ( float( g_iSuperSpeedMax ) / 100.0 ) + 1.0;
-	if ( speed > 2.0 ) speed = 2.0;
-	if ( speed < 1.0 ) speed = 1.0;
-	
-	SetEntityGravity( client, 0.8 );
-	SetEntPropFloat( client, Prop_Data, "m_flLaggedMovementValue", speed );
-	SetRenderColour( client, g_iColor_LBlue, 220 );
-
-	int userid = GetClientIndex( client, false );
-	g_PDClientLuffy[client].hLuffySpeed = CreateTimer( 0.1, Timer_LuffySpeed, userid, TIMER_REPEAT );
-	
-	if ( g_bHinttext )
-	{
-		PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Speed" );
-		PrintHintText( client, "++ Luffy Speed last in %d sec ++", g_iSpeedCoolDown );
-	}
-}
-
-public Action Timer_LuffySpeed( Handle timer, any userid ) //<< ok
-{
-	int client = GetClientIndex( userid, true );
-	if ( IsValidSurvivor( client ))
-	{
-		if( IsPlayerAlive( client ) && g_bIsRoundStart )
-		{
-			g_PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
-			if( g_PDClientLuffy[client].fAbilityCountdown > 0.0 )
-			{
-				SetupShieldDorm( client, g_iColor_Blue, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
-				
-				if( g_bHinttext )
-				{
-					//calculate how long time has pass since we display our hint message
-					float time = GetGameTime();
-					float shif = time - g_PDClientLuffy[client].fClientTimeBuffer;
-					if( shif >= 1.0 )
-					{
-						g_PDClientLuffy[client].iHintCountdown -= 1;
-						g_PDClientLuffy[client].fClientTimeBuffer = time;
-					}
-					
-					if( g_bAllowCountdownMsg || g_PDClientLuffy[client].iHintCountdown == 3 || g_PDClientLuffy[client].iHintCountdown == 10 || g_PDClientLuffy[client].iHintCountdown == 20 )
-					{
-						PrintHintText( client, "++ Luffy Speed last in %d sec ++", g_PDClientLuffy[client].iHintCountdown );
-					}
-				}
-				return Plugin_Continue;
-			}
-		}
-		
-		EmitSoundToClient( client, SND_TIMEOUT );
-		ResetLuffyAbility( client );
-
-		if ( g_bHinttext )
-		{
-			PrintHintText( client, "-- Luffy Speed time out --" );
-		}
-	}
-	return Plugin_Stop;
-}
-
-void RunLuffyStrength( int client ) //<< test this ingame color = green
-{
-	EmitSoundToClient( client, SND_STRENGTH );
-	g_PDClientLuffy[client].iHintCountdown = g_iStrengthCoolDown;
-	g_PDClientLuffy[client].fAbilityCountdown = float( g_iStrengthCoolDown );
-	SetEntityGravity( client, STRENGTH_GRAVITY );
-	SetRenderColour( client,g_iColor_Green, 220 );
-	
-	float time = GetGameTime();
-	g_PDClientLuffy[client].fClientTimeBuffer		= time;		// check how long since we display message to him
-	g_PDClientLuffy[client].fDoubleDashTimeLast	= time;		// check his double dash key frame
-	g_PDClientLuffy[client].bIsDoubleDashPaused	= false;
-	
-	int userid = GetClientIndex( client, false );
-	g_PDClientLuffy[client].hLuffyStrength = CreateTimer( 0.1, Timer_LuffyStrength, userid, TIMER_REPEAT );
-	
-	if ( g_bHinttext )
-	{
-		PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Strength" );
-		PrintHintText( client, "++ Luffy Strength, press 'MOVE + SPACE' to Dash in midair ++", g_iStrengthCoolDown );
-	}
-}
-
-public Action Timer_LuffyStrength( Handle timer, any userid ) //<< ok
-{
-	int client = GetClientIndex( userid, true );
-	if ( IsValidSurvivor( client ))
-	{
-		if( IsPlayerAlive( client ) && g_bIsRoundStart )
-		{
-			if( (GetEntityFlags(client) & FL_ONGROUND) )
-			{
-				g_PDClientLuffy[client].bIsDoubleDashPaused = false;
-			}
-			
-			g_PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
-			if( g_PDClientLuffy[client].fAbilityCountdown > 0.0 )
-			{
-				SetupShieldDorm( client, g_iColor_Green, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
-				
-				if( g_bHinttext )
-				{
-					//calculate how long time has pass since we display our hint message
-					float time = GetGameTime();
-					float shif = time - g_PDClientLuffy[client].fClientTimeBuffer;
-					if( shif >= 1.0 )
-					{
-						g_PDClientLuffy[client].iHintCountdown -= 1;
-						g_PDClientLuffy[client].fClientTimeBuffer = time;
-					}
-					
-					if( g_bAllowCountdownMsg || g_PDClientLuffy[client].iHintCountdown == 3 || g_PDClientLuffy[client].iHintCountdown == 10 || g_PDClientLuffy[client].iHintCountdown == 20 )
-					{
-						PrintHintText( client, "++ Luffy Strength last in %d sec ++", g_PDClientLuffy[client].iHintCountdown );
-					}
-				}
-				return Plugin_Continue;
-			}
-		}
-		
-		EmitSoundToClient( client, SND_TIMEOUT );
-		ResetLuffyAbility( client );
-		
-		if ( g_bHinttext )
-		{
-			PrintHintText( client, "-- Luffy Strength time out --" );
-		}
-	}
-	return Plugin_Stop;
-}
-
-void RunLuffyShield( int client ) //<< ok color = red
-{
-	int shield = SetupShield( client, SHIELD_TYPE_DAMAGE, -1 );
-	if( shield != -1 )
-	{
-		SetEntProp( client, Prop_Data, "m_takedamage", 0, 1 ); //<<<< i forget what is this, should be not taking damage. but setting it here is just wrong
-		EmitSoundToClient( client, SND_CLOCK );
-		
-		g_PDClientLuffy[client].iHintCountdown = g_iShieldCoolDown;
-		g_PDClientLuffy[client].fAbilityCountdown = float( g_iShieldCoolDown );
-		g_PDClientLuffy[client].fClientTimeBuffer = GetGameTime();
-		SetRenderColour( client, g_iColor_LRed, 220 );
-		
-		int userid = GetClientIndex( client, false );
-		g_PDClientLuffy[client].hLuffyShield = CreateTimer( 0.1, Timer_LuffyShield, userid, TIMER_REPEAT );
-
-		if ( g_bHinttext )
-		{
-			PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Shield" );
-			PrintHintText( client, "++ Luffy Shield last in %d sec ++", g_iShieldCoolDown );
-		}
-	}
-}
-
-public Action Timer_LuffyShield( Handle timer, any userid ) //<< ok this have shield <<< duh... the name says it.
-{
-	int client = GetClientIndex( userid, true );
-	if ( IsValidSurvivor( client ))
-	{
-		if( IsPlayerAlive( client ) && g_bIsRoundStart )
-		{
-			g_PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
-			if( g_PDClientLuffy[client].fAbilityCountdown > 0.0 )
-			{
-				SetupShieldDorm( client, g_iColor_Red, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
-				
-				float pos_client[3];
-				GetEntOrigin( client, pos_client, 0.0 );
-
-				int shield = EntRefToEntIndex( g_PDClientLuffy[client].iPlayerShield );
-				if( shield != -1 )
-				{
-					float currAng[3];
-					GetEntAngle( shield, currAng, 20.0, AXIS_YAW );
-					BoundAngleValue( currAng, currAng, 360.0, AXIS_YAW );		// prevent number from going huge
-					
-					if ( g_iShieldType == 1 )
-					{
-						float temp = pos_client[2];
-						pos_client[2] += 30.0;
-						TeleportEntity( shield, pos_client, currAng, NULL_VECTOR );
-						pos_client[2] = temp;
-					}
-					else
-					{
-						TeleportEntity( shield, NULL_VECTOR, currAng, NULL_VECTOR );
-					}
-				}
-				
-				float pos_target[3];
-				char className[64];
-			
-				int  eCount = GetEntityCount();
-				for ( int  i = 1; i <= eCount; i++ )
-				{
-					if ( i <= MaxClients )
-					{
-						if ( IsValidInfected( i ) && IsPlayerAlive( i ))
-						{
-							GetEntOrigin( i, pos_target, 0.0 );
-							if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
-							{
-								if ( GetZclass( i ) == ZOMBIE_TANK )
-								{
-									CreatePointHurt( client, i, g_iTankDamage, DMG_GENERIC, pos_target, SHIELD_RADIUS );		// we give him some serious hits
-									CreateShieldPush( client, i, SHIELD_PUSHSHIELD );											// but we dont push that hard
-								}
-								else
-								{
-									CreatePointHurt( client, i, g_iSuperShieldDamage, DMG_GENERIC, pos_target, SHIELD_RADIUS );	// we give him some serious hits
-									CreateShieldPush( client, i, SHIELD_PUSHSHIELD );											// but we dont push that hard
-								}
-							}
-						}
-					}
-					else
-					{
-						if ( IsValidEntity( i ))
-						{
-							GetEntityClassname( i, className, sizeof( className ));
-							if ( StrEqual( className, "infected", false ) || StrEqual( className, "witch", false ))
-							{
-								GetEntOrigin( i, pos_target, 0.0 );
-								if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
-								{
-									CreatePointHurt( client, i, g_iSuperShieldDamage, DMG_GENERIC, pos_target, SHIELD_RADIUS );
-									CreateShieldPush( client, i, SHIELD_PUSHSHIELD );
-								}
-							}
-						}
-					}
-				}
-				
-				if( g_bHinttext )
-				{
-					//calculate how long time has pass since we display our hint message
-					float time = GetGameTime();
-					float shif = time - g_PDClientLuffy[client].fClientTimeBuffer;
-					if( shif >= 1.0 )
-					{
-						g_PDClientLuffy[client].iHintCountdown -= 1;
-						g_PDClientLuffy[client].fClientTimeBuffer = time;
-					}
-					
-					if( g_bAllowCountdownMsg || g_PDClientLuffy[client].iHintCountdown == 3 || g_PDClientLuffy[client].iHintCountdown == 10 || g_PDClientLuffy[client].iHintCountdown == 20 )
-					{
-						PrintHintText( client, "++ Luffy Shield last in %d sec ++", g_PDClientLuffy[client].iHintCountdown );
-					}
-				}
-				return Plugin_Continue;
-			}
-		}
-		
-		EmitSoundToClient( client, SND_TIMEOUT );
-		ResetLuffyAbility( client );
-
-		if ( g_bHinttext )
-		{
-			PrintHintText( client, "-- Luffy Shield time out --" );
-		}
-	}
-	return Plugin_Stop;
-}
-
-int SetupShield( int client, int type, int color ) //<< ok
-{
-	// shield type 1 = damage
-	// shield type 2 = decoration
-	// shield type 3 = push
-	
-	float wPos[3];
-	float wAng[3];
-	GetEntOrigin( client, wPos, 30.0 );
-	GetEntAngle( client, wAng, 0.0, 0 );
-
-	int  wingcenter = CreatEntRenderModel( PROPTYPE_DYNAMIC, DMY_SDKHOOK, wPos, wAng, 0.01 );
-	if( wingcenter != -1 )
-	{
-		if ( g_iShieldType == 0 )
-		{
-			SetVariantString( "!activator" );
-			AcceptEntityInput( wingcenter, "SetParent", client );
-			SetVariantString( "spine" );
-			AcceptEntityInput( wingcenter, "SetParentAttachment" );
-			
-			float pos[3] = { 0.0, 0.0, 0.0 };
-			float ang[3] = { 0.0, 0.0, -90.0 };
-			TeleportEntity( wingcenter, ang, pos, NULL_VECTOR);
-		}
-		
-		SetRenderColour( wingcenter, g_iColor_White, 0 );
-		g_PDClientLuffy[client].iPlayerShield = EntIndexToEntRef( wingcenter );
-		
-		/// attach the wing here
-		int  numberWing;
-		if ( type == SHIELD_TYPE_DAMAGE || type == SHIELD_TYPE_PUSH )
-		{
-			numberWing = 6;		// any number will do. it depend on our taste
-			EmitSoundToClient( client, SND_SUPERSHIELD );
+			// model selection dont matter here. its random in timer
+			candropluffy = true;	//we can drop
 		}
 		else
 		{
-			numberWing = 4;		// any number will do. it depend on our taste. this serve as decoration only.
-		}
-		
-		float wingRadius		= SHIELD_RADIUS;				// wide of our wing opening, wing type 1 and 2 may not show correct distance due to its own orientation from parent.
-		float incRadius			= 360.0 / float( numberWing );	// calculate space between our wing.
-		float wingAngle			= 0.0;							// wing attachment start angle
-		float wingFacing		= 90.0;							// manipulate which side of our wing facing
-		float wingPosition[3]	= { 0.0, 0.0, 0.0 };			// position of our wing relative to the parent/center/body. whatever the name
-		
-		bool iswingsuccsess = true;								// check if our creation fully assemble
-		int wing;
-		// we draw a circle and determine each intersection point/distance for attachment
-		for ( int i = 1; i <= numberWing; i ++ )
-		{
-			wingPosition[0] = wingRadius * Cosine( DegToRad( wingAngle ));	// calculate the intersect between radius and angle
-			wingPosition[1] = wingRadius * Sine( DegToRad( wingAngle ));	// calculate the intersect between radius and angle
+			char ammoname[64];
+			if( GetRandomInt( 1, 2 ) == 1 )
+			{
+				Format( ammoname, sizeof( ammoname ), "weapon_upgradepack_explosive" );
+			}
+			else
+			{
+				Format( ammoname, sizeof( ammoname ), "weapon_upgradepack_incendiary" );
+			}
 			
-			wing = AttachWing( wingcenter, wPos, wingPosition, wingFacing, type, color );
-			if ( wing == -1 )
+			int ammobox = GivePlayerItems( client, ammoname );
+			if( ammobox != -1 )
 			{
-				PrintToServer( "" );
-				PrintToServer( "|LUFFY| Error, wing creation failed |LUFFY|" );
-				PrintToServer( "" );
-				iswingsuccsess = false;
-				break;
+				// kill this ammobox to prevent out server flooded.
+				CreateTimer( AMMOBOX_LIFE, Timer_AmmoBoxlife, EntIndexToEntRef( ammobox ), TIMER_FLAG_NO_MAPCHANGE );
 			}
-			wingAngle	+= incRadius;	// next point attachment
-			wingFacing	+= incRadius;	// where should our next wing facing.
 		}
 		
-		// wing creation failed. delete all garbage
-		if( !iswingsuccsess )
+		if( candropluffy )
 		{
-			// for fail safe check. dont flood our server with garbage.
-			DeletePlayerShield( client );
-			wingcenter = -1;
-		}
-	}
-	return wingcenter;
-}
+			float pos_world[3];
+			float ang_world[3] = { 0.0, 0.0, 0.0 };
+			GetEntOrigin( client, pos_world, 20.0 );
 
-int AttachWing( int parent, float pos_world[3], float pos_parent[3], float ang_adjustment, int type, int color ) //<< ok
-{
-	char model[128];
-	float scale = g_fModelScale[ePOS_JETF18];
-	Format( model, sizeof( model ), g_sModelBuffer[ePOS_JETF18] );
-
-	float buffAng[3] = { 0.0, 0.0, 0.0 };
-	if ( type == 1 )
-	{
-		buffAng[1] = ang_adjustment;
-	}
-	else if ( type == 2 )
-	{
-		buffAng[0] = -90.0;
-		buffAng[1] = ( ang_adjustment + 90.0 );
-	}
-	else if ( type == 3 )
-	{
-		scale = 1.0;
-		Format( model, sizeof( model ), MDL_RIOTSHIELD );
-		buffAng[1] = ( ang_adjustment - 90.0 );
-	}
-	
-	int  shield = CreatEntChild( parent, model, pos_world, pos_parent, buffAng, scale );
-	if ( shield != -1 )
-	{
-		if ( type == 1 )
-		{
-			SetRenderColour( shield, g_iColor_White, 100 );
-			ToggleGlowEnable( shield, true );
-		}
-		else if ( type == 2 )
-		{
-			if ( color == 1 ) SetRenderColour( shield, g_iColor_LRed, 70 );
-			if ( color == 2 ) SetRenderColour( shield, g_iColor_LBlue, 70 );
-			if ( color == 3 ) SetRenderColour( shield, g_iColor_LGreen, 70 );
-		}
-		else if ( type == 3 )
-		{
-			SetRenderColour( shield, g_iColor_Dark, 100 );
-			ToggleGlowEnable( shield, true );
-		}
-	}
-	return shield;
-}
-
-void DeletePlayerShield( int client )	//<< ok
-{
-	int shield = EntRefToEntIndex( g_PDClientLuffy[client].iPlayerShield );
-	RemoveEntity_ClearParent( shield );
-	g_PDClientLuffy[client].iPlayerShield = -1;
-}
-
-void RunFreezeClient( int client ) //<< ok
-{
-	// froze his button
-	FreezePlayerButton( client, true );
-	
-	float playerPos[3];
-	GetEntOrigin( client, playerPos, 10.0 );
-	switch( GetRandomInt( 1, 2 ))
-	{
-		case 1:
-		{
-			// freeze him for 10 second and give him explosion
-			g_PDClientLuffy[client].iUnfreezCountdown = 10;
-			switch( GetRandomInt( 1, 2 ))
+			// a dummy detect player touch
+			int dummy = CreateEntParent( DMY_SDKHOOK, pos_world, ang_world, g_fModelScale[ePOS_SDKHOOK] );
+			if( dummy > MaxClients && IsValidEntity( dummy ))
 			{
-				case 1: { CreatPointDamageRadius( playerPos, PARTICLE_ELECTRIC1, 30, 300, client ); }
-				case 2: { CreatPointDamageRadius( playerPos, PARTICLE_ELECTRIC2, 30, 300, client );	}
-			}
-			if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )		// if player ability still active, we dont spoil/overwrite the color
-			{
-				SetRenderColour( client, g_iColor_LBlue, 180 );
-			}
-		}
-		case 2:
-		{
-			// freeze him and give him fire for 3 second
-			g_PDClientLuffy[client].iUnfreezCountdown = 3;
-			if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )		// if player ability still active, we dont spoil/overwrite the color
-			{
-				SetRenderColour( client, g_iColor_LRed, 180 );
-			}
-			CreatPointDamageRadius( playerPos, PARTICLE_CREATEFIRE, 20, 300, client );
-		}
-	}
-
-	g_PDClientLuffy[client].hMoveFreeze = CreateTimer( 1.0, Timer_RestoreFrozenButton, GetClientIndex( client, false ), TIMER_REPEAT );
-	EmitSoundToAll( SND_FREEZE, client, SNDCHAN_AUTO );
-	PrintHintText( client, "-- You will be unfreze in %d sec --", g_PDClientLuffy[client].iUnfreezCountdown );
-}
-
-public Action Timer_RestoreFrozenButton( Handle timer, any userid )	//<< ok
-{
-	int client = GetClientIndex( userid, true );
-	if( IsValidSurvivor( client ))
-	{
-		if( IsPlayerAlive( client ) && g_bIsRoundStart )
-		{
-			g_PDClientLuffy[client].iUnfreezCountdown--;
-			if( g_PDClientLuffy[client].iUnfreezCountdown > 0 )
-			{
-				if( !IsPlayerIncap( client ) && !IsPlayerLedge( client ))
+				float pos_parent[3] = { 0.0, 0.0, 0.0 };
+				
+				// a decoy skin.. what player actualy see but cant touch
+				int skin = CreatEntChild( dummy, g_sModelBuffer[modeltype], pos_world, pos_parent, ang_world, g_fModelScale[modeltype] );
+				if( skin > MaxClients && IsValidEntity( skin ))
 				{
-					if ( g_bHinttext  && g_PDClientLuffy[client].fAbilityCountdown == 0.0 || !g_bAllowCountdownMsg )
+					EMLuffyDrop[dummy].iSelf = EntIndexToEntRef( dummy );
+					EMLuffyDrop[dummy].iChild = EntIndexToEntRef( skin );
+					EMLuffyDrop[dummy].SaveModel( g_sModelBuffer[modeltype], g_fModelScale[modeltype] );
+
+					if( g_bShowDummyModel )
 					{
-						PrintHintText( client, "-- You will be unfreze in %d sec --", g_PDClientLuffy[client].iUnfreezCountdown );
+						ToggleGlowEnable( dummy, true );
 					}
-					return Plugin_Continue;
+					else
+					{
+						SetRenderColour( dummy, g_iColor_White, 0 );	// make our dummy invisible
+					}
+					
+					ToggleGlowEnable( skin, true );
+					SDKHook( dummy, SDKHook_StartTouchPost, OnLuffyObjectTouch );
+					
+					float life = g_fLuffyItemLife;
+					if ( life > 300.0 ) life = 300.0;
+					if ( life < 10.0 ) life = 10.0;
+				
+					g_iLuffySpawnCount++;
+					EMLuffyDrop[dummy].bIsRandom	= israndommodel;
+					EMLuffyDrop[dummy].fLife = life;
+					EMLuffyDrop[dummy].hTimer = CreateTimer( 0.1, Timer_LuffySpawnLife, EntIndexToEntRef( dummy ), TIMER_REPEAT );
+					
+					if( !israndommodel )
+					{
+						// determine which model to drop next ahead of time after
+						
+						g_bSafeToRollNextDiceModel = false;
+						// create this timer to free EVENT_PlayerDeath and EVENT_WitchDeath out of while loop;
+						CreateTimer( 0.05, Timer_ScrambleModelSelectionDice, 0, TIMER_FLAG_NO_MAPCHANGE );
+					}
+				}
+				else
+				{
+					RemoveEntity( dummy );
 				}
 			}
 		}
-		
-		// unfroze his button
-		FreezePlayerButton( client, false );
-		
-		EmitSoundToClient( client, SND_FREEZE );
-		g_PDClientLuffy[client].hMoveFreeze = INVALID_HANDLE;
-		
-		if( g_PDClientLuffy[client].fAbilityCountdown == 0.0 )
-		{
-			SetRenderColour( client, g_iColor_White, 255 );
-		}
-		
-		if ( g_bHinttext )
-		{
-			PrintHintText( client, "++ You were unfrezed ++" );
-		}
 	}
-	return Plugin_Stop;
 }
 
-void RunLuffyPunishment( int client ) //<< ok
+int HomingCompareTarget( int missile, int target )
 {
-	switch( GetRandomInt( 1, 5 ))
+	int base = EntRefToEntIndex( g_iHomingBaseOwner[missile] );
+	if( base > MaxClients )
 	{
-		case 1 : { RewardTeleport( client, "Tank" );		}
-		case 2 : { RewardTeleport( client, "Witch" );		}
-		case 3 : { RewardTeleport( client, "Infected" );	}
-		case 4 : { RunFreezeClient( client );				}
-		case 5 : { RunFreezeClient( client );				}
+		// check if the target not targeted. return -1 for already targeted.
+		for( int j = 0; j < sizeof( g_iHomingBaseTarget[] ); j++ )
+		{
+			if( g_iHomingBaseTarget[base][j] != -1 )
+			{
+				if( g_iHomingBaseTarget[base][j] == target )
+				{
+					return -1;
+				}
+			}
+		}
 	}
+	return target;
 }
 
-void ResetLuffyAbility( int client ) //<< ok
+void ResetLuffyAbility( int client )
 {
 	DeletePlayerShield( client );
 	
-	g_PDClientLuffy[client].fAbilityCountdown = 0.0;
-	g_PDClientLuffy[client].fClientTimeBuffer = 0.0;
-	g_PDClientLuffy[client].iHintCountdown = 0;
+	PDClientLuffy[client].fAbilityCountdown = 0.0;
+	PDClientLuffy[client].fClientTimeBuffer = 0.0;
+	PDClientLuffy[client].iHintCountdown = 0;
 	
 	SetEntityGravity( client, 1.0 );
 	SetEntProp( client, Prop_Data, "m_takedamage", 2, 1 );
 	SetEntPropFloat( client, Prop_Data, "m_flLaggedMovementValue", 1.0 );
 
 	SetRenderColour( client, g_iColor_White, 255 );
-	g_PDClientLuffy[client].hLuffyClock = INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffySpeed = INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffyShield = INVALID_HANDLE;
-	g_PDClientLuffy[client].hLuffyStrength = INVALID_HANDLE;
 }
 
-void DropRandomWeapon( int client, int selection )		//<< ok
+void DropRandomWeapon( int client, int selection )
 {
 	int  r;
 	switch( selection )
@@ -3225,7 +2130,7 @@ void DropRandomWeapon( int client, int selection )		//<< ok
 	}
 }
 
-int GivePlayerItems( int client, const char[] item_name )		//<< ok 
+int GivePlayerItems( int client, const char[] item_name )
 {
 	bool glow = true;
 	char name_buffer[32];
@@ -3414,7 +2319,7 @@ int GivePlayerItems( int client, const char[] item_name )		//<< ok
 	return entity;
 }
 
-int GetEmptyWeaponDropBuffer()     //<< ok
+int GetEmptyWeaponDropBuffer()
 {
 	for( int  i = 0; i < SIZE_DROPBUFF; i++ )
 	{
@@ -3426,7 +2331,7 @@ int GetEmptyWeaponDropBuffer()     //<< ok
 	return -1;
 }
 
-int CompareWeaponDropBuffer( int entity )     //<< ok
+int CompareWeaponDropBuffer( int entity )
 {
 	int item;
 	for( int  i = 0; i < SIZE_DROPBUFF; i++ )
@@ -3443,7 +2348,7 @@ int CompareWeaponDropBuffer( int entity )     //<< ok
 	return -1;
 }
 
-void SetupBloodSpark( int client )	//<< ok
+void SetupBloodSpark( int client )
 {
 	float pos[3];
 	for ( int  i = 0; i <= 5; i++ )
@@ -3501,7 +2406,7 @@ void SetupBloodSpark( int client )	//<< ok
 	}
 }
 
-void ToggleGlowEnable( int entity, bool enable ) //<< ok
+void ToggleGlowEnable( int entity, bool enable )
 {
 	int  m_glowtype = 0;
 	int  m_glowcolor = 0;
@@ -3558,7 +2463,7 @@ void ToggleGlowEnable( int entity, bool enable ) //<< ok
 	SetEntProp( entity, Prop_Send, "m_glowColorOverride", m_glowcolor );
 }
 
-void CheatCommand( int client, const char[] cheats, const char[] command )   //<< ok
+void CheatCommand( int client, const char[] cheats, const char[] command )
 {
 	if ( StrContains( command, "witch auto", false ) != -1 )
 	{
@@ -3600,7 +2505,7 @@ void CheatCommand( int client, const char[] cheats, const char[] command )   //<
 	SetUserFlagBits( client, userflags );
 }
 
-int FindEntityAndCount( int client, const char[] _findWhat ) //<< ok
+int FindEntityAndCount( int client, const char[] _findWhat )
 {
 	int  scan = 0;
 	if ( StrEqual( _findWhat, "Tank", false ))
@@ -3649,48 +2554,14 @@ int FindEntityAndCount( int client, const char[] _findWhat ) //<< ok
 	return scan;
 }
 
-bool RestockPrimaryAmmo( int client, int multiplayer )    //<< ok
+bool RestockPrimaryAmmo( int client, int multiplayer )
 {
 	char weapon_name[64];
 	int weapon = GetPlayerWeaponSlot( client, 0 );
 	if( weapon > MaxClients && IsValidEntity( weapon ))
 	{
 		GetEntityClassname( weapon, weapon_name, sizeof( weapon_name ));
-		int  ammoStock	= 0;
-
-		if ( StrEqual( weapon_name, "weapon_rifle_m60", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_m60_max" ));
-		}
-		else if ( StrEqual( weapon_name, "weapon_grenade_launcher", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar("ammo_grenadelauncher_max"));
-		}
-		else if ( StrEqual( weapon_name, "weapon_rifle", false ) || StrEqual( weapon_name, "weapon_rifle_ak47", false ) || StrEqual( weapon_name, "weapon_rifle_desert", false ) || StrEqual( weapon_name,"weapon_rifle_sg552", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_assaultrifle_max" ));
-		}
-		else if ( StrEqual( weapon_name, "weapon_shotgun_spas", false ) || StrEqual( weapon_name, "weapon_autoshotgun", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_autoshotgun_max" ));
-		}
-		else if ( StrEqual( weapon_name, "weapon_sniper_awp", false ) || StrEqual( weapon_name, "weapon_sniper_military", false ) || StrEqual( weapon_name, "weapon_sniper_scout", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_sniperrifle_max" ));
-		}
-		else if ( StrEqual( weapon_name, "weapon_hunting_rifle", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_huntingrifle_max" ));
-		}
-		else if ( StrEqual( weapon_name, "weapon_shotgun_chrome", false ) || StrEqual( weapon_name, "weapon_pumpshotgun", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_shotgun_max" ));
-		}
-		else if ( StrEqual( weapon_name, "weapon_smg", false ) || StrEqual( weapon_name, "weapon_smg_silenced", false ) || StrEqual( weapon_name, "weapon_smg_mp5", false ))
-		{
-			ammoStock = GetConVarInt( FindConVar( "ammo_smg_max" ));
-		}
-		
+		int  ammoStock	= GetGameMaxAmmo( weapon );
 		if ( ammoStock > 0 )
 		{
 			ammoStock *= multiplayer;
@@ -3701,6 +2572,39 @@ bool RestockPrimaryAmmo( int client, int multiplayer )    //<< ok
 		}
 	}
 	return false;
+}
+
+int GetGameMaxAmmo( int weapon )
+{
+	char weapon_name[64];
+	GetEntityClassname( weapon, weapon_name, sizeof( weapon_name ));
+	int  ammoStock	= -1;
+
+	if ( StrEqual( weapon_name, "weapon_rifle_m60", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_m60_max" ));
+	}
+	else if ( StrEqual( weapon_name, "weapon_grenade_launcher", false )) {
+		ammoStock = GetConVarInt( FindConVar("ammo_grenadelauncher_max"));
+	}
+	else if ( StrEqual( weapon_name, "weapon_rifle", false ) || StrEqual( weapon_name, "weapon_rifle_ak47", false ) || StrEqual( weapon_name, "weapon_rifle_desert", false ) || StrEqual( weapon_name,"weapon_rifle_sg552", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_assaultrifle_max" ));
+	}
+	else if ( StrEqual( weapon_name, "weapon_shotgun_spas", false ) || StrEqual( weapon_name, "weapon_autoshotgun", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_autoshotgun_max" ));
+	}
+	else if ( StrEqual( weapon_name, "weapon_sniper_awp", false ) || StrEqual( weapon_name, "weapon_sniper_military", false ) || StrEqual( weapon_name, "weapon_sniper_scout", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_sniperrifle_max" ));
+	}
+	else if ( StrEqual( weapon_name, "weapon_hunting_rifle", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_huntingrifle_max" ));
+	}
+	else if ( StrEqual( weapon_name, "weapon_shotgun_chrome", false ) || StrEqual( weapon_name, "weapon_pumpshotgun", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_shotgun_max" ));
+	}
+	else if ( StrEqual( weapon_name, "weapon_smg", false ) || StrEqual( weapon_name, "weapon_smg_silenced", false ) || StrEqual( weapon_name, "weapon_smg_mp5", false )) {
+		ammoStock = GetConVarInt( FindConVar( "ammo_smg_max" ));
+	}
+	return ammoStock;
 }
 
 void PCMasterRace_Render_ARGB( int client, int alpha )
@@ -3728,3 +2632,1099 @@ void PCMasterRace_Render_ARGB( int client, int alpha )
 		}
 	}
 }
+
+void CreateShieldPush( int client, int target, float force )
+{
+	float pos_client[3];
+	float pos_target[3];
+	float vel_target[3];
+	float ang_target[3];
+	GetEntOrigin( client, pos_client, 0.0 );
+	GetEntOrigin( target, pos_target, 0.0 );
+	
+	MakeVectorFromPoints( pos_client, pos_target, vel_target );
+	GetVectorAngles( vel_target, ang_target );
+	ang_target[0] -= 20.0;												// redirect him to the air, slightly
+	GetAngleVectors( ang_target, vel_target, NULL_VECTOR, NULL_VECTOR );	// recalculate the velocity.
+	NormalizeVector( vel_target, vel_target );
+	ScaleVector( vel_target, force );
+	TeleportEntity( target, NULL_VECTOR, NULL_VECTOR, vel_target );
+	
+	if( target <= MaxClients )
+	{
+		// if we cant push them, then kill the attacker
+		bool isluck = false;
+		if ( GetEntProp( client, Prop_Send, "m_tongueOwner" ) > 0 && GetZclass( target ) == ZOMBIE_SMOKER )
+		{
+			isluck = true;
+			SetEntityMoveType( target, MOVETYPE_NOCLIP );
+			CreateTimer( 0.1, Timer_RestoreCollution, GetClientUserId( target ));
+		}
+		else if( GetEntPropEnt( client, Prop_Send, "m_pounceAttacker" ) > 0 && GetZclass( target ) == ZOMBIE_CHARGER )
+		{
+			isluck = true;
+			CheatCommand( target, "kill", "" );
+		}
+		else if ( GetEntPropEnt( client, Prop_Send, "m_jockeyAttacker" ) > 0 && GetZclass( target ) == ZOMBIE_JOCKEY )
+		{
+			isluck = true;
+			CheatCommand( target, "dismount", "" );
+		}
+		
+		if( isluck )
+		{
+			EmitSoundToClient( client, SND_HEALTH );
+			if ( g_bHinttext )
+			{
+				PrintHintText( client, "++ You freed from %N ++", target );
+			}
+		}
+	}
+	
+	// this is the section causing player screen to black out for the dying animation loop and cause them stuck with it untill client game restart.
+	// never occour to me that someone actualy have the balls to stand on top of 10 boxes of fire cracker next to 10 gallon of gascan stack together.
+	// we are going to fix him with 200 health buff aka half god mode. << in theory, this bug only happen to clock ability since the shield practilly immortal/god mode.
+	if ( IsPlayerIncap( client ))
+	{
+		ResetPlayerIncap( client );
+		CheatCommand( client, "give", "health" );
+		SetPlayerHealthBuffer( client, 200.0 );		// give himm 200 health buff to break the incap loop. 100 buff will do but 20 flameable prop give us a lil concern.
+		SetPlayerHealth( client, 1 );
+		PrintHintText( client, "++ You recovered from Incap ++" );
+	}
+	else if(  IsPlayerLedge( client ))
+	{
+		ResetPlayerLedge( client );
+	}
+}
+
+void SetTeleport( int client, const char[] who )
+{
+	// if my memory serve me well, the witch and/or Tank in the map cause problem to our plugin. Cant recall what it is.
+	// comment this out and debug yourself to findout.
+	if ( StrContains( g_sCURRENT_MAP, "c5m2", false ) != -1 )
+	{
+		if ( StrEqual( who, "Witch", false ) || StrEqual( who, "Tank", false ))
+		{
+			if ( g_bHinttext )
+			{
+				PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You found \x05Empty Luffy!!" );
+			}
+			return;
+		}
+	}
+	
+	int  scan = -1;
+	
+	if ( StrEqual( who, "Tank", false ))
+	{
+		for ( int  i = 1; i <= MaxClients; i++ )
+		{
+			if ( IsValidInfected( i ) && IsPlayerAlive( i ))
+			{
+				if ( GetZclass( i ) == ZOMBIE_TANK )
+				{
+					scan = i;
+					break;
+				}
+			}
+		}
+	}
+	else if ( StrEqual( who, "Witch", false ))
+	{
+		char _name[64];
+		int  _max	= GetEntityCount();
+		for ( int  i = MaxClients; i <= _max; i++ )
+		{
+			if ( IsValidEntity( i ))
+			{
+				GetEntityClassname( i, _name, sizeof( _name ));
+				if ( StrContains( _name, "witch", false) != -1 )
+				{
+					//if ( GetEntProp( i, Prop_Data, "m_iHealth" ) > 1 )	//<< this could be wrong/crashing the server <<< note to self >> test this
+					//{														// update: ya.. checked my witch plugins, it will crash the server.
+						scan = i;											// so we dont check her health... just teleport.
+						break;
+					//}
+				}
+			}
+		}
+	}
+	else if ( StrEqual( who, "Infected", false ))
+	{
+		for ( int  i = MaxClients; i <= 1; i-- )
+		{
+			if ( IsValidInfected( i ) && IsPlayerAlive( i ))
+			{
+				scan = i;
+				break;
+			}
+		}
+	}
+	else if ( StrEqual( who, "Survivor", false ))
+	{
+		for ( int  i = 1; i <= MaxClients; i++ )
+		{
+			if ( IsValidSurvivor( i ) && i != client )
+			{
+				scan = i;
+				break;
+			}
+		}
+	}
+
+	if ( scan == -1 )
+	{
+		
+		if ( StrContains( who, "Survivor", false ) != -1 )
+		{
+			switch( GetRandomInt( 1, 3 ))
+			{
+				case 1: { GivePlayerItems( client, "weapon_defibrillator" );	}
+				case 2: { GivePlayerItems( client, "weapon_pain_pills" );		}
+				case 3: { GivePlayerItems( client, "weapon_adrenaline" );		}
+			}
+		}
+		// we cant teleport him to tank, witch or infected, give him 1 instead.
+		else if ( StrContains( who, "Tank", false ) != -1 )
+		{
+			CheatCommand( client, "z_spawn", "tank auto" );						// we cant teleport him to the tank, then give tank next to him.
+		}
+		else if ( StrContains( who, "Witch", false ) != -1 )
+		{
+			CheatCommand( client, "z_spawn", "witch auto" );					// we cant teleport him to the witch, then give witch next to him.
+		}
+		else if ( StrContains( who, "Infected", false ) != -1 )
+		{
+			switch( GetRandomInt( 1, 6 ))
+			{
+				case 1: { CheatCommand( client, "z_spawn", "smoker auto" ); }	// we cant teleport him to any SI, then give 1 next to him.
+				case 2: { CheatCommand( client, "z_spawn", "boomer auto" ); }
+				case 3: { CheatCommand( client, "z_spawn", "hunter auto" ); }
+				case 4: { CheatCommand( client, "z_spawn", "spitter auto" ); }
+				case 5: { CheatCommand( client, "z_spawn", "jockey auto" ); }
+				case 6: { CheatCommand( client, "z_spawn", "charger auto" ); }
+			}
+		}
+	}
+	else
+	{
+		float _location[3];
+		GetEntOrigin( scan, _location, 10.0 );
+		TeleportEntity( client, _location, NULL_VECTOR, NULL_VECTOR );
+		EmitSoundToClient( client, SND_TELEPORT );
+		
+		if ( g_bHinttext )
+		{
+			PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy %s Teleport.", who );
+		}
+	}
+}
+
+void SetLuffyClock( int client )	// yellow
+{
+	int shield = SetupShield( client, SHIELD_TYPE_PUSH, 1 );
+	if( shield != -1 )
+	{
+		EmitSoundToClient( client, SND_CLOCK );
+		PDClientLuffy[client].iHintCountdown = g_iClockCoolDown;
+		PDClientLuffy[client].fAbilityCountdown = float( g_iClockCoolDown );
+		PDClientLuffy[client].fClientTimeBuffer = GetGameTime();
+		SetRenderColour( client, g_iColor_Yellow, 220 );
+		
+		PDClientLuffy[client].iLuffyType = TYPE_CLOCK;
+		PDClientLuffy[client].hLuffyTimer = CreateTimer( 0.1, Timer_LuffyClock, GetClientUserId( client ), TIMER_REPEAT );
+		
+		if ( g_bHinttext )
+		{
+			PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Clock" );
+			PrintHintText( client, "++ Luffy Clock last in %d sec ++", g_iClockCoolDown );
+		}
+	}
+}
+
+void SetLuffySpeed( int client )	// blue
+{
+	EmitSoundToClient( client, SND_SPEED );
+	PDClientLuffy[client].iHintCountdown = g_iSpeedCoolDown;
+	PDClientLuffy[client].fAbilityCountdown = float( g_iSpeedCoolDown );
+	PDClientLuffy[client].fClientTimeBuffer = GetGameTime();
+	
+	float speed = ( float( g_iSuperSpeedMax ) / 100.0 ) + 1.0;
+	if ( speed > 2.0 ) speed = 2.0;
+	if ( speed < 1.0 ) speed = 1.0;
+	
+	SetEntityGravity( client, 0.8 );
+	SetEntPropFloat( client, Prop_Data, "m_flLaggedMovementValue", speed );
+	SetRenderColour( client, g_iColor_LBlue, 220 );
+
+	PDClientLuffy[client].iLuffyType = TYPE_SPEED;
+	PDClientLuffy[client].hLuffyTimer = CreateTimer( 0.1, Timer_LuffySpeed, GetClientUserId( client ), TIMER_REPEAT );
+	
+	if ( g_bHinttext )
+	{
+		PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Speed" );
+		PrintHintText( client, "++ Luffy Speed last in %d sec ++", g_iSpeedCoolDown );
+	}
+}
+
+void SetLuffyShield( int client )	// red
+{
+	int shield = SetupShield( client, SHIELD_TYPE_DAMAGE, -1 );
+	if( shield != -1 )
+	{
+		SetEntProp( client, Prop_Data, "m_takedamage", 0, 1 ); //<<<< i forget what is this, should be not taking damage. but setting it here is just wrong
+		EmitSoundToClient( client, SND_CLOCK );
+		
+		PDClientLuffy[client].iHintCountdown = g_iShieldCoolDown;
+		PDClientLuffy[client].fAbilityCountdown = float( g_iShieldCoolDown );
+		PDClientLuffy[client].fClientTimeBuffer = GetGameTime();
+		SetRenderColour( client, g_iColor_LRed, 220 );
+		
+		PDClientLuffy[client].iLuffyType = TYPE_SHIELD;
+		PDClientLuffy[client].hLuffyTimer = CreateTimer( 0.1, Timer_LuffyShield, GetClientUserId( client ), TIMER_REPEAT );
+
+		if ( g_bHinttext )
+		{
+			PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Shield" );
+			PrintHintText( client, "++ Luffy Shield last in %d sec ++", g_iShieldCoolDown );
+		}
+	}
+}
+
+void SetLuffyStrength( int client )	// green
+{
+	EmitSoundToClient( client, SND_STRENGTH );
+	PDClientLuffy[client].iHintCountdown = g_iStrengthCoolDown;
+	PDClientLuffy[client].fAbilityCountdown = float( g_iStrengthCoolDown );
+	SetEntityGravity( client, STRENGTH_GRAVITY );
+	SetRenderColour( client,g_iColor_Green, 220 );
+	
+	float time = GetGameTime();
+	PDClientLuffy[client].fClientTimeBuffer		= time;		// check how long since we display message to him
+	PDClientLuffy[client].fDoubleDashTimeLast	= time;			// check his double dash key frame
+	PDClientLuffy[client].bIsDoubleDashPaused	= false;
+	
+	PDClientLuffy[client].iLuffyType = TYPE_STRENGTH;
+	PDClientLuffy[client].hLuffyTimer = CreateTimer( 0.1, Timer_LuffyStrength, GetClientUserId( client ), TIMER_REPEAT );
+	
+	if ( g_bHinttext )
+	{
+		PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Strength" );
+		PrintHintText( client, "++ Luffy Strength, press 'MOVE + SPACE' to Dash in midair ++", g_iStrengthCoolDown );
+	}
+}
+
+void SetLuffyHealth( int client )
+{
+	EmitSoundToClient( client, SND_HEALTH );
+	PDClientLuffy[client].bIsHPInterrupted = false;
+	PDClientLuffy[client].hHealthRegen = CreateTimer( 0.1, Timer_LuffyHealth, GetClientUserId( client ), TIMER_REPEAT );
+	if ( g_bHinttext )
+	{
+		PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05You acquired \x04Luffy Health" );
+	}
+}
+
+void SetLuffyPunishment( int client )
+{
+	switch( GetRandomInt( 1, 5 ))
+	{
+		case 1 : { SetTeleport( client, "Tank" );		}
+		case 2 : { SetTeleport( client, "Witch" );		}
+		case 3 : { SetTeleport( client, "Infected" );	}
+		case 4 : { SetFreeze( client );				}
+		case 5 : { SetFreeze( client );				}
+	}
+}
+
+void SetFreeze( int client )
+{
+	// froze his button
+	PDClientLuffy[client].ButtonFreeze( client );
+	
+	float playerPos[3];
+	GetEntOrigin( client, playerPos, 10.0 );
+	switch( GetRandomInt( 1, 2 ))
+	{
+		case 1:
+		{
+			// freeze him for 10 second and give him explosion
+			PDClientLuffy[client].iUnfreezCountdown = 10;
+			switch( GetRandomInt( 1, 2 ))
+			{
+				case 1: { CreatPointDamageRadius( playerPos, PARTICLE_ELECTRIC1, 30, 300, client ); }
+				case 2: { CreatPointDamageRadius( playerPos, PARTICLE_ELECTRIC2, 30, 300, client );	}
+			}
+			if( PDClientLuffy[client].fAbilityCountdown == 0.0 )		// if player ability still active, we dont spoil/overwrite the color
+			{
+				SetRenderColour( client, g_iColor_LBlue, 180 );
+			}
+		}
+		case 2:
+		{
+			// freeze him and give him fire for 3 second
+			PDClientLuffy[client].iUnfreezCountdown = 3;
+			if( PDClientLuffy[client].fAbilityCountdown == 0.0 )		// if player ability still active, we dont spoil/overwrite the color
+			{
+				SetRenderColour( client, g_iColor_LRed, 180 );
+			}
+			CreatPointDamageRadius( playerPos, PARTICLE_CREATEFIRE, 20, 300, client );
+		}
+	}
+
+	PDClientLuffy[client].hMoveFreeze = CreateTimer( 1.0, Timer_RestoreFrozenButton, GetClientUserId( client ), TIMER_REPEAT );
+	EmitSoundToAll( SND_FREEZE, client, SNDCHAN_AUTO );
+	PrintHintText( client, "-- You will be unfreze in %d sec --", PDClientLuffy[client].iUnfreezCountdown );
+}
+
+int SetupShield( int client, int type, int color )
+{
+	// shield type 1 = damage
+	// shield type 2 = decoration
+	// shield type 3 = push
+	
+	float wPos[3];
+	float wAng[3];
+	GetEntOrigin( client, wPos, 30.0 );
+	GetEntAngle( client, wAng, 0.0, 0 );
+
+	int  wingcenter = CreatEntRenderModel( PROPTYPE_DYNAMIC, DMY_SDKHOOK, wPos, wAng, 0.01 );
+	if( wingcenter != -1 )
+	{
+		if ( g_iShieldType == 0 )
+		{
+			SetVariantString( "!activator" );
+			AcceptEntityInput( wingcenter, "SetParent", client );
+			SetVariantString( "spine" );
+			AcceptEntityInput( wingcenter, "SetParentAttachment" );
+			
+			float pos[3] = { 0.0, 0.0, 0.0 };
+			float ang[3] = { 0.0, 0.0, -90.0 };
+			TeleportEntity( wingcenter, ang, pos, NULL_VECTOR);
+		}
+		
+		SetRenderColour( wingcenter, g_iColor_White, 0 );
+		PDClientLuffy[client].iPlayerShield = EntIndexToEntRef( wingcenter );
+		
+		/// attach the wing here
+		int  numberWing;
+		if ( type == SHIELD_TYPE_DAMAGE || type == SHIELD_TYPE_PUSH )
+		{
+			numberWing = 6;		// any number will do. it depend on our taste
+			EmitSoundToClient( client, SND_SUPERSHIELD );
+		}
+		else
+		{
+			numberWing = 4;		// any number will do. it depend on our taste. this serve as decoration only.
+		}
+		
+		float wingRadius		= SHIELD_RADIUS;				// wide of our wing opening, wing type 1 and 2 may not show correct distance due to its own orientation from parent.
+		float incRadius			= 360.0 / float( numberWing );	// calculate space between our wing.
+		float wingAngle			= 0.0;							// wing attachment start angle
+		float wingFacing		= 90.0;							// manipulate which side of our wing facing
+		float wingPosition[3]	= { 0.0, 0.0, 0.0 };			// position of our wing relative to the parent/center/body. whatever the name
+		
+		bool iswingsuccsess = true;								// check if our creation fully assemble
+		int wing;
+		// we draw a circle and determine each intersection point/distance for attachment
+		for ( int i = 1; i <= numberWing; i ++ )
+		{
+			wingPosition[0] = wingRadius * Cosine( DegToRad( wingAngle ));	// calculate the intersect between radius and angle
+			wingPosition[1] = wingRadius * Sine( DegToRad( wingAngle ));	// calculate the intersect between radius and angle
+			
+			wing = AttachWing( wingcenter, wPos, wingPosition, wingFacing, type, color );
+			if ( wing == -1 )
+			{
+				PrintToServer( "" );
+				PrintToServer( "|LUFFY| Error, wing creation failed |LUFFY|" );
+				PrintToServer( "" );
+				iswingsuccsess = false;
+				break;
+			}
+			wingAngle	+= incRadius;	// next point attachment
+			wingFacing	+= incRadius;	// where should our next wing facing.
+		}
+		
+		// wing creation failed. delete all garbage
+		if( !iswingsuccsess )
+		{
+			// for fail safe check. dont flood our server with garbage.
+			DeletePlayerShield( client );
+			wingcenter = -1;
+		}
+	}
+	return wingcenter;
+}
+
+int AttachWing( int parent, float pos_world[3], float pos_parent[3], float ang_adjustment, int type, int color )
+{
+	char model[128];
+	float scale = g_fModelScale[ePOS_JETF18];
+	Format( model, sizeof( model ), g_sModelBuffer[ePOS_JETF18] );
+
+	float buffAng[3] = { 0.0, 0.0, 0.0 };
+	if ( type == 1 )
+	{
+		buffAng[1] = ang_adjustment;
+	}
+	else if ( type == 2 )
+	{
+		buffAng[0] = -90.0;
+		buffAng[1] = ( ang_adjustment + 90.0 );
+	}
+	else if ( type == 3 )
+	{
+		scale = 1.0;
+		Format( model, sizeof( model ), MDL_RIOTSHIELD );
+		buffAng[1] = ( ang_adjustment - 90.0 );
+	}
+	
+	int  shield = CreatEntChild( parent, model, pos_world, pos_parent, buffAng, scale );
+	if ( shield != -1 )
+	{
+		if ( type == 1 )
+		{
+			SetRenderColour( shield, g_iColor_White, 100 );
+			ToggleGlowEnable( shield, true );
+		}
+		else if ( type == 2 )
+		{
+			if ( color == 1 ) SetRenderColour( shield, g_iColor_LRed, 70 );
+			if ( color == 2 ) SetRenderColour( shield, g_iColor_LBlue, 70 );
+			if ( color == 3 ) SetRenderColour( shield, g_iColor_LGreen, 70 );
+		}
+		else if ( type == 3 )
+		{
+			SetRenderColour( shield, g_iColor_Dark, 100 );
+			ToggleGlowEnable( shield, true );
+		}
+	}
+	return shield;
+}
+
+void DeletePlayerShield( int client )
+{
+	int shield = EntRefToEntIndex( PDClientLuffy[client].iPlayerShield );
+	RemoveEntity_ClearParent( shield );
+	PDClientLuffy[client].iPlayerShield = -1;
+}
+
+
+
+/////////////////////////////////////////////////////////////
+//======================== Timers =========================//
+/////////////////////////////////////////////////////////////
+
+public Action Timer_JetF18Life( Handle timer, any entref )
+{
+	int jetf18 = EntRefToEntIndex( entref );
+	if( IsEntityValid( jetf18 ))
+	{
+		int client = GetOwner( jetf18 );
+		if ( IsValidSurvivor( client ))
+		{
+			if( g_bIsRoundStart )
+			{
+				PDClientLuffy[client].iClientMissile -= 1;
+				if( PDClientLuffy[client].iClientMissile > 0 )
+				{
+					PCMasterRace_Render_ARGB( client, SHIELD_DORM_ALPHA );	// that right.. you read that correctly
+					
+					float pos_client[3];
+					float clAng[3];
+					GetEntOrigin( client, pos_client, 130.0 );
+					GetEntAngle( client, clAng, 15.0, AXIS_PITCH );
+					TeleportEntity( jetf18, pos_client,  clAng , NULL_VECTOR );
+					
+					// launch missile here
+					float pos_start[3];
+					float pos_end[3];
+					float ang_start[3];
+					
+					GetClientEyePosition( client, pos_start );		// start pos of the missile
+					GetClientEyeAngles( client, ang_start );		// start angle of the missile
+					
+					bool gotpos = TraceRayGetEndpoint( pos_start, ang_start, client, pos_end );
+					if ( gotpos )
+					{
+						/// random missile start firing pos >>> near survivor owner of the missile
+						pos_start[0] += GetRandomFloat( -30.0, 30.0 );		//<<< random pos around player location.
+						pos_start[1] += GetRandomFloat( -30.0, 30.0 );		//<<< random pos around player location.
+						pos_start[2] += GetRandomFloat( 100.0, 130.0 );		//<<< always above player head
+						
+						/// random missile target pos
+						pos_end[0] += GetRandomFloat( -100.0, 100.0 );		//<<< scramble target pos. << for more accuracy zero the value
+						pos_end[1] += GetRandomFloat( -100.0, 100.0 );		//<<< scramble target pos. << for more accuracy zero the value
+						pos_end[2] += GetRandomFloat( -50.0, 50.0 );		//<<< scramble target pos. << for more accuracy zero the value
+						
+						int missile = CreateMissileProjectile( client, pos_start, pos_end );	// create a missile and shoot it.
+						if( missile != -1 )
+						{
+							ChangeDirectionAndShoot( missile, pos_end, MISSILE_TARGET_SPEED, -90.0 );	// -90.0 is the molotove body pitch correction
+						}
+						// if this missile dont hit anything, we kill it.
+						CreateTimer( HOMING_EXPIRE, Timer_MissileExplode, EntIndexToEntRef( missile ), TIMER_FLAG_NO_MAPCHANGE );
+					}
+					else
+					{
+						PrintToChat( client, "\x04[\x05LUFFY\x04]: \x05Null aimed location!!" );
+					}
+					return Plugin_Continue;
+				}
+			}
+			EmitSoundToClient( client, SND_JETPASS );
+			PDClientLuffy[client].hAirStrike = null;
+		}
+		RemoveEntity_KillHierarchy( jetf18 );
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_ScrambleModelSelectionDice( Handle timer, any data )
+{
+	while(	g_iLuffyModelSelection[0] == g_iLuffyModelSelection[1] || g_iLuffyModelSelection[0] == g_iLuffyModelSelection[2] ||
+			g_iLuffyModelSelection[0] == g_iLuffyModelSelection[3] || g_iLuffyModelSelection[0] == g_iLuffyModelSelection[4] ) {
+			g_iLuffyModelSelection[0] = GetRandomInt( 0, 8 );
+	}
+	
+	g_iLuffyModelSelection[4] = g_iLuffyModelSelection[3];
+	g_iLuffyModelSelection[3] = g_iLuffyModelSelection[2];
+	g_iLuffyModelSelection[2] = g_iLuffyModelSelection[1];
+	g_iLuffyModelSelection[1] = g_iLuffyModelSelection[0];
+	
+	g_bSafeToRollNextDiceModel = true;
+}
+
+public Action Timer_LuffySpawnLife( Handle timer, any entref )
+{
+	int entity = EntRefToEntIndex( entref );
+	if( IsEntityValid( entity ))
+	{
+		int child = GetEntityChild( entity );
+		if( IsEntityValid( child ))
+		{
+			if ( EMLuffyDrop[entity].bThinkLife( entity ))
+			{
+				if( EMLuffyDrop[entity].bIsRandom )
+				{
+					int rand = EMLuffyDrop[entity].RollModelDice();
+					EMLuffyDrop[entity].SetModel( entity, g_sModelBuffer[rand], g_fModelScale[rand] );
+				}
+				
+				return Plugin_Continue;
+			}
+	
+			g_iLuffySpawnCount--;
+			if( g_iLuffySpawnCount < 0 )
+			{
+				g_iLuffySpawnCount = 0;
+			}
+			
+			SDKUnhook( entity, SDKHook_StartTouchPost, OnLuffyObjectTouch );
+			RemoveEntity_KillHierarchy( entity );
+		}
+		EMLuffyDrop[entity].hTimer = null;
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_AmmoBoxlife( Handle timer, any entref )
+{
+	int ammobox = EntRefToEntIndex( entref );
+	if( IsEntityValid( ammobox ))
+	{
+		int client = GetOwner( ammobox );
+		if( !IsValidSurvivor( client ))
+		{
+			RemoveEntity_Kill( ammobox );
+		}
+	}
+}
+
+public Action Timer_PlayLuffyPickupAnimation( Handle timer, any entref )
+{
+	int entity = EntRefToEntIndex( entref );
+	if( entity > MaxClients )
+	{
+		if( g_bIsRoundStart && g_iSkinAnimeCount[entity] > 0 && g_iSkinAnimeCount[entity] <= ANIMATION_COUNT )
+		{
+			SetEntPropFloat( entity, Prop_Send, "m_flModelScale", g_fSkinAnimeScale[entity] );
+			g_fSkinAnimeScale[entity] *= 1.2;
+			g_iSkinAnimeCount[entity] += 1;
+			return Plugin_Continue;
+		}
+		
+		g_iSkinAnimeCount[entity] = 0;
+		g_fSkinAnimeScale[entity] = 0.0;
+		RemoveEntity_Kill( entity );
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_RollAmmoboxDice( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if( IsValidSurvivor( client ))
+	{
+		PDClientLuffy[client].iRollRandomDice();
+	}
+}
+
+public Action Timer_LuffyHealth( Handle timer, any userid ) //<< check legde grab and incap( we not entirely sure what happen during the animation )
+{
+	int client = GetClientOfUserId( userid );
+	if ( IsValidSurvivor( client ))
+	{
+		if( IsPlayerAlive( client ))
+		{
+			int health = GetPlayerHealth( client );
+			if( g_bIsRoundStart && health < g_iHPregenMax )
+			{
+				// // player not incap or ledge grab during animation, safe to continue
+				if( !IsPlayerLedge( client ) && !IsPlayerIncap( client ))
+				{
+					PDClientLuffy[client].iCleintHPHealth = health + 1;
+					PDClientLuffy[client].fCleintHPBuffer = 100.0 - float( PDClientLuffy[client].iCleintHPHealth );			// make sure our health dont exceed 100
+					SetPlayerHealthBuffer( client, PDClientLuffy[client].fCleintHPBuffer );
+					SetPlayerHealth( client, PDClientLuffy[client].iCleintHPHealth );
+					return Plugin_Continue;
+				}
+				
+				if( IsPlayerIncap( client ))
+				{
+					// mark player as hp regen intruppted
+					PDClientLuffy[client].bIsHPInterrupted = true;
+				}
+			}
+			
+			if( !PDClientLuffy[client].bIsHPInterrupted )
+			{
+				SetPlayerHealthBuffer( client, 0.0 );
+				SetPlayerHealth( client, 100 );
+				ResetPlayerLifeCount( client );
+				EmitSoundToClient( client, SND_TIMEOUT );
+				PDClientLuffy[client].iCleintHPHealth = 0;
+				PDClientLuffy[client].fCleintHPBuffer = 0.0;
+			}
+		}
+		PDClientLuffy[client].hHealthRegen = null;
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_RestoreCollution( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if ( IsValidSurvivor( client )) 
+	{
+		SetEntityMoveType( client, MOVETYPE_WALK );
+	}
+}
+
+public Action Timer_LuffyClock( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if ( IsValidSurvivor( client ))
+	{
+		if( IsPlayerAlive( client ))
+		{
+			PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
+			if( PDClientLuffy[client].fAbilityCountdown > 0.0 )
+			{
+				SetupShieldDorm( client, g_iColor_Yellow, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
+				
+				float pos_client[3];
+				GetEntOrigin( client, pos_client, 20.0 );
+
+				int shield = EntRefToEntIndex( PDClientLuffy[client].iPlayerShield );
+				if( shield != -1 )
+				{
+					float currAng[3];
+					GetEntAngle( shield, currAng, 20.0, AXIS_YAW );
+					BoundAngleValue( currAng, currAng, 360.0, AXIS_YAW );			// prevent number from going huge
+					
+					if ( g_iShieldType == 1 )
+					{
+						TeleportEntity( shield, pos_client, currAng, NULL_VECTOR );
+					}
+					else
+					{
+						TeleportEntity( shield, NULL_VECTOR, currAng, NULL_VECTOR );
+					}
+				}
+				
+				float pos_target[3];
+				char className[128];
+				int  count_mdl = GetEntityCount();
+				for ( int  i = 1; i <= count_mdl; i++ )
+				{
+					if ( i <= MaxClients )
+					{
+						if ( IsValidInfected( i ) && IsPlayerAlive( i ))
+						{
+							GetEntOrigin( i, pos_target, 20.0 );
+							if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
+							{
+								CreatePointHurt( client, i, 1, DAMAGE_EXPLOSIVE, pos_target, SHIELD_RADIUS );	// do 1 damage to tell the infected who is responsible for tackling his armpits.
+								CreateShieldPush( client, i, SHIELD_PUSHCLOCK );								// we dont kill him, just push him harder
+							}
+						}
+					}
+					else
+					{
+						if ( IsValidEntity( i ))
+						{
+							GetEntityClassname( i, className, sizeof( className ));
+							if ( StrEqual( className, "infected", false ) || StrEqual( className, "witch", false ))
+							{
+								GetEntOrigin( i, pos_target, 20.0 );
+								if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
+								{
+									CreatePointHurt( client, i, 1, DAMAGE_EXPLOSIVE, pos_target, SHIELD_RADIUS ); 	// do 1 damage to tell the witch who is responsible for tackling his armpits.
+									CreateShieldPush( client, i, SHIELD_PUSHCLOCK );								// we dont kill him, just push him harder
+								}
+							}
+						}
+					}
+				}
+				
+				if( g_bHinttext )
+				{
+					//calculate how long time has pass since we display our hint message
+					float time = GetGameTime();
+					float shif = time - PDClientLuffy[client].fClientTimeBuffer;
+					if( shif >= 1.0 )
+					{
+						PDClientLuffy[client].iHintCountdown -= 1;
+						PDClientLuffy[client].fClientTimeBuffer = time;
+					}
+					
+					if( g_bAllowCountdownMsg || PDClientLuffy[client].iHintCountdown == 3 || PDClientLuffy[client].iHintCountdown == 10 || PDClientLuffy[client].iHintCountdown == 20 )
+					{
+						PrintHintText( client, "++ Luffy Clock last in %d sec ++", PDClientLuffy[client].iHintCountdown );
+					}
+				}
+				return Plugin_Continue;
+			}
+		}
+		
+		EmitSoundToClient( client, SND_TIMEOUT );
+		ResetLuffyAbility( client );
+		
+		if ( g_bHinttext )
+		{
+			PrintHintText( client, "-- Luffy Clock time out --" );
+		}
+		PDClientLuffy[client].iLuffyType = TYPE_NONE;
+		PDClientLuffy[client].hLuffyTimer = null;
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_LuffySpeed( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if ( IsValidSurvivor( client ))
+	{
+		if( IsPlayerAlive( client ) && g_bIsRoundStart )
+		{
+			PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
+			if( PDClientLuffy[client].fAbilityCountdown > 0.0 )
+			{
+				SetupShieldDorm( client, g_iColor_Blue, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
+				
+				if( g_bHinttext )
+				{
+					//calculate how long time has pass since we display our hint message
+					float time = GetGameTime();
+					float shif = time - PDClientLuffy[client].fClientTimeBuffer;
+					if( shif >= 1.0 )
+					{
+						PDClientLuffy[client].iHintCountdown -= 1;
+						PDClientLuffy[client].fClientTimeBuffer = time;
+					}
+					
+					if( g_bAllowCountdownMsg || PDClientLuffy[client].iHintCountdown == 3 || PDClientLuffy[client].iHintCountdown == 10 || PDClientLuffy[client].iHintCountdown == 20 )
+					{
+						PrintHintText( client, "++ Luffy Speed last in %d sec ++", PDClientLuffy[client].iHintCountdown );
+					}
+				}
+				return Plugin_Continue;
+			}
+		}
+		
+		EmitSoundToClient( client, SND_TIMEOUT );
+		ResetLuffyAbility( client );
+
+		if ( g_bHinttext )
+		{
+			PrintHintText( client, "-- Luffy Speed time out --" );
+		}
+		PDClientLuffy[client].iLuffyType = TYPE_NONE;
+		PDClientLuffy[client].hLuffyTimer = null;
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_LuffyStrength( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if ( IsValidSurvivor( client ))
+	{
+		if( IsPlayerAlive( client ) && g_bIsRoundStart )
+		{
+			if( (GetEntityFlags(client) & FL_ONGROUND) )
+			{
+				PDClientLuffy[client].bIsDoubleDashPaused = false;
+			}
+			
+			PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
+			if( PDClientLuffy[client].fAbilityCountdown > 0.0 )
+			{
+				SetupShieldDorm( client, g_iColor_Green, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
+				
+				if( g_bHinttext )
+				{
+					//calculate how long time has pass since we display our hint message
+					float time = GetGameTime();
+					float shif = time - PDClientLuffy[client].fClientTimeBuffer;
+					if( shif >= 1.0 )
+					{
+						PDClientLuffy[client].iHintCountdown -= 1;
+						PDClientLuffy[client].fClientTimeBuffer = time;
+					}
+					
+					if( g_bAllowCountdownMsg || PDClientLuffy[client].iHintCountdown == 3 || PDClientLuffy[client].iHintCountdown == 10 || PDClientLuffy[client].iHintCountdown == 20 )
+					{
+						PrintHintText( client, "++ Luffy Strength last in %d sec ++", PDClientLuffy[client].iHintCountdown );
+					}
+				}
+				return Plugin_Continue;
+			}
+		}
+		
+		EmitSoundToClient( client, SND_TIMEOUT );
+		ResetLuffyAbility( client );
+		
+		if ( g_bHinttext )
+		{
+			PrintHintText( client, "-- Luffy Strength time out --" );
+		}
+		PDClientLuffy[client].iLuffyType = TYPE_NONE;
+		PDClientLuffy[client].hLuffyTimer = null;
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_LuffyShield( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if ( IsValidSurvivor( client ))
+	{
+		if( IsPlayerAlive( client ) && g_bIsRoundStart )
+		{
+			PDClientLuffy[client].fAbilityCountdown -= 0.1 ;
+			if( PDClientLuffy[client].fAbilityCountdown > 0.0 )
+			{
+				SetupShieldDorm( client, g_iColor_Red, SHIELD_DORM_RADIUS, g_iBeamSprite_Bubble, SHIELD_DORM_ALPHA );
+				
+				float pos_client[3];
+				GetEntOrigin( client, pos_client, 0.0 );
+
+				int shield = EntRefToEntIndex( PDClientLuffy[client].iPlayerShield );
+				if( shield != -1 )
+				{
+					float currAng[3];
+					GetEntAngle( shield, currAng, 20.0, AXIS_YAW );
+					BoundAngleValue( currAng, currAng, 360.0, AXIS_YAW );		// prevent number from going huge
+					
+					if ( g_iShieldType == 1 )
+					{
+						float temp = pos_client[2];
+						pos_client[2] += 30.0;
+						TeleportEntity( shield, pos_client, currAng, NULL_VECTOR );
+						pos_client[2] = temp;
+					}
+					else
+					{
+						TeleportEntity( shield, NULL_VECTOR, currAng, NULL_VECTOR );
+					}
+				}
+				
+				float pos_target[3];
+				char className[64];
+			
+				int  eCount = GetEntityCount();
+				for ( int  i = 1; i <= eCount; i++ )
+				{
+					if ( i <= MaxClients )
+					{
+						if ( IsValidInfected( i ) && IsPlayerAlive( i ))
+						{
+							GetEntOrigin( i, pos_target, 0.0 );
+							if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
+							{
+								if ( GetZclass( i ) == ZOMBIE_TANK )
+								{
+									CreatePointHurt( client, i, g_iTankDamage, DMG_GENERIC, pos_target, SHIELD_RADIUS );		// we give him some serious hits
+									CreateShieldPush( client, i, SHIELD_PUSHSHIELD );											// but we dont push that hard
+								}
+								else
+								{
+									CreatePointHurt( client, i, g_iSuperShieldDamage, DMG_GENERIC, pos_target, SHIELD_RADIUS );	// we give him some serious hits
+									CreateShieldPush( client, i, SHIELD_PUSHSHIELD );											// but we dont push that hard
+								}
+							}
+						}
+					}
+					else
+					{
+						if ( IsValidEntity( i ))
+						{
+							GetEntityClassname( i, className, sizeof( className ));
+							if ( StrEqual( className, "infected", false ) || StrEqual( className, "witch", false ))
+							{
+								GetEntOrigin( i, pos_target, 0.0 );
+								if ( GetVectorDistance( pos_client, pos_target ) <= SHIELD_RADIUS )
+								{
+									CreatePointHurt( client, i, g_iSuperShieldDamage, DMG_GENERIC, pos_target, SHIELD_RADIUS );
+									CreateShieldPush( client, i, SHIELD_PUSHSHIELD );
+								}
+							}
+						}
+					}
+				}
+				
+				if( g_bHinttext )
+				{
+					//calculate how long time has pass since we display our hint message
+					float time = GetGameTime();
+					float shif = time - PDClientLuffy[client].fClientTimeBuffer;
+					if( shif >= 1.0 )
+					{
+						PDClientLuffy[client].iHintCountdown -= 1;
+						PDClientLuffy[client].fClientTimeBuffer = time;
+					}
+					
+					if( g_bAllowCountdownMsg || PDClientLuffy[client].iHintCountdown == 3 || PDClientLuffy[client].iHintCountdown == 10 || PDClientLuffy[client].iHintCountdown == 20 )
+					{
+						PrintHintText( client, "++ Luffy Shield last in %d sec ++", PDClientLuffy[client].iHintCountdown );
+					}
+				}
+				return Plugin_Continue;
+			}
+		}
+		
+		EmitSoundToClient( client, SND_TIMEOUT );
+		ResetLuffyAbility( client );
+
+		if ( g_bHinttext )
+		{
+			PrintHintText( client, "-- Luffy Shield time out --" );
+		}
+		PDClientLuffy[client].iLuffyType = TYPE_NONE;
+		PDClientLuffy[client].hLuffyTimer = null;
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_RestoreFrozenButton( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if( IsValidSurvivor( client ))
+	{
+		if( IsPlayerAlive( client ) && g_bIsRoundStart )
+		{
+			PDClientLuffy[client].iUnfreezCountdown--;
+			if( PDClientLuffy[client].iUnfreezCountdown > 0 )
+			{
+				if( !IsPlayerIncap( client ) && !IsPlayerLedge( client ))
+				{
+					if ( g_bHinttext  && PDClientLuffy[client].fAbilityCountdown == 0.0 || !g_bAllowCountdownMsg )
+					{
+						PrintHintText( client, "-- You will be unfreze in %d sec --", PDClientLuffy[client].iUnfreezCountdown );
+					}
+					return Plugin_Continue;
+				}
+			}
+		}
+		
+		// unfroze his button
+		PDClientLuffy[client].ButtonUnfreeze( client );
+		
+		EmitSoundToClient( client, SND_FREEZE );
+		PDClientLuffy[client].hMoveFreeze = null;
+		
+		if( PDClientLuffy[client].fAbilityCountdown == 0.0 )
+		{
+			SetRenderColour( client, g_iColor_White, 255 );
+		}
+		
+		if ( g_bHinttext )
+		{
+			PrintHintText( client, "++ You were unfrezed ++" );
+		}
+	}
+	return Plugin_Stop;
+}
+
+public Action Timer_PrecacheEntity( Handle timer, any userid )
+{
+	int client = GetClientOfUserId( userid );
+	if( IsValidSurvivor( client ))
+	{
+		int count_prt = 0;
+		bool missileshoot = false;
+
+		float pos1[3];
+		float pos2[3];
+		GetEntOrigin( client, pos1, 3000.0 );
+		GetEntOrigin( client, pos2, 5000.0 );
+		
+		if( CreatPointDamageRadius( pos1, PARTICLE_CREATEFIRE, 0, 0, -1 )) { count_prt += 1; }
+		if( CreatePointParticle( pos1, PARTICLE_EXPLOSIVE, 0.1 )) { count_prt += 1; }
+		if( CreatePointParticle( pos1, PARTICLE_ELECTRIC1, 0.1 )) { count_prt += 1; }
+		if( CreatePointParticle( pos1, PARTICLE_ELECTRIC2, 0.1 )) { count_prt += 1; }
+		
+		int missile = CreateMissileProjectile( -1, pos1, pos2 );
+		if( missile != -1 )
+		{
+			ChangeDirectionAndShoot( missile, pos2, MISSILE_TARGET_SPEED, -90.0 ); //-90.0 is the molotov body pitch correction
+			CreateTimer( 1.0, Timer_MissileExplode, EntIndexToEntRef( missile ));
+			missileshoot = true;
+		}
+		
+		if( g_bIsDebugMode )
+		{
+			if( count_prt < 4 )
+			{
+				PrintToServer( "" );
+				PrintToServer( "|LUFFY| Error Precache particle | less %d particle |LUFFY|", ( 4 - count_prt ));
+				PrintToServer( "" );
+			}
+			else
+			{
+				PrintToServer( "|LUFFY| All Particle Precached Succsessfuly |LUFFY|" );
+			}
+			
+			if( missileshoot )
+			{
+				PrintToServer( "|LUFFY| Missile has beed precached :) |LUFFY|" );
+			}
+		}
+	}
+}
+
+public Action Timer_DeletIndex( Handle timer, any entref )
+{
+	int entity = EntRefToEntIndex( entref );
+	if( IsEntityValid( entity ))
+	{
+		AcceptEntityInput( entity, "Kill" );
+	}
+}
+
+
+
+
