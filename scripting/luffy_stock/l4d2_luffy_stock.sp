@@ -5,6 +5,10 @@ todo list?
 // sm_cvar l4d2_luffy_homing_num 1000
 */
 
+#define SIZE_DROPBUFF			200					// array size for items drop tracking buffer
+#define SIZE_ENTITYBUFF			2049				//<< array size too big. preformance inpact minimal.
+													// (i do realize the existing of dynamic array but i m not willing to debug that :( << we are done here
+
 #define ZOMBIE_NONE		0
 #define ZOMBIE_SMOKER	1
 #define ZOMBIE_BOOMER	2
@@ -52,9 +56,22 @@ int g_iColor_Yellow[3]	= { 255, 255, 000 };
 int g_iColor_Dark[3]	= { 128, 128, 128 };
 int g_iColor_Exaust[3]	= { 060, 080, 200 };
 
-enum
+enum	// Luffy ability type
 {
-	ePOS_CLOCK = 0,	// track our model position in array
+	TYPE_NONE,
+	TYPE_CLOCK,
+	TYPE_SPEED,
+	TYPE_SHIELD,
+	TYPE_STRENGTH,
+	TYPE_HEALTH,
+	TYPE_POISON,
+	TYPE_FREEZE,
+	TYPE_SIZE
+};
+
+enum	// array precache position
+{
+	ePOS_CLOCK,
 	ePOS_SPEED,
 	ePOS_POISON,
 	ePOS_REGEN,
@@ -142,37 +159,36 @@ enum struct EntityManager
 	}
 }
 
-EntityManager g_esLuffyDrop[PLATFORM_MAX_PATH];
-
-// g_esLuffyDrop[entity].bThinkLife()
+EntityManager EMLuffyDrop[SIZE_ENTITYBUFF];
 
 enum struct PlayerData
 {
 	Handle	hHealthRegen;
-	Handle	hLuffySpeed;
-	Handle	hLuffyStrength;
-	Handle	hLuffyClock;
-	Handle	hLuffyShield;
 	Handle	hAirStrike;
 	Handle	hMoveFreeze;
+	Handle	hLuffyTimer;
 	
 	bool	bAirStrike;
 	bool	bHomingBTN;
 	bool	bIsHPInterrupted;
 	bool	bIsDoubleDashPaused;
+	bool	bIsButtonFroze;
 	
 	float	fAbilityCountdown;
 	float	fClientTimeBuffer;
 	float	fCleintHPBuffer;
 	float	fDoubleDashTimeLast;
+	float	fPosJump[3];
+	float	fScale;
 
-	int	iHintCountdown;
-	int iPlayerShield;
-	int iCleintHPHealth;
-	int iUnfreezCountdown;
-	int iClientMissile;
-
-	int iClientDice[10];
+	int		iHintCountdown;
+	int		iPlayerShield;
+	int		iCleintHPHealth;
+	int		iUnfreezCountdown;
+	int		iClientMissile;
+	int		iLuffyType;
+	int		iClientDice[10];
+	
 	int iRollRandomDice()
 	{
 		while ( this.iClientDice[0] == this.iClientDice[1] || 
@@ -190,11 +206,48 @@ enum struct PlayerData
 		
 		return this.iClientDice[0];
 	}
+	
+	void TimerDelete()
+	{
+		delete this.hHealthRegen;
+		delete this.hAirStrike;
+		delete this.hMoveFreeze;
+		delete this.hLuffyTimer;
+	}
+	
+	void TimerReset()
+	{
+		this.hHealthRegen	= null;
+		this.hAirStrike		= null;
+		this.hMoveFreeze	= null;
+		this.hLuffyTimer	= null;
+	}
+	
+	bool LuffySetClock()
+	{
+		
+	}
+	
+	void ButtonFreeze( int client )
+	{
+		if( !this.bIsButtonFroze )
+		{
+			int buttons = GetEntityFlags( client );
+			SetEntityFlags( client, ( buttons |= FL_FROZEN ));
+		}
+	}
+	
+	void ButtonUnfreeze( int client )
+	{
+		if( this.bIsButtonFroze )
+		{
+			int buttons = GetEntityFlags( client );
+			SetEntityFlags( client, ( buttons &= ~FL_FROZEN ));
+		}
+	}
 }
+PlayerData PDClientLuffy[MAXPLAYERS+1];
 
-PlayerData g_PDClientLuffy[MAXPLAYERS+1];
-
-// g_PDClientLuffy[client].fDoubleDashTimeLast
 
 stock void CreatePointHurt( int attacker, int victim, int damage, int damage_type, float pos[3], float radius )  //<< ok
 {
@@ -519,29 +572,17 @@ stock void CopyArray3DF( float array_in[3], float array_out[3] )
 
 stock bool IsValidInfected( int client )
 {
-	return ( client > 0 && client <= MaxClients && IsClientConnected( client ) && IsClientInGame( client ) && GetClientTeam( client ) == 3 );
+	return ( client > 0 && client <= MaxClients && IsClientInGame( client ) && GetClientTeam( client ) == 3 );
 }
 
 stock bool IsValidSurvivor( int client )
 {
-	return ( client > 0 && client <= MaxClients && IsClientConnected( client ) && IsClientInGame( client ) && GetClientTeam( client ) == 2 );
+	return ( client > 0 && client <= MaxClients && IsClientInGame( client ) && GetClientTeam( client ) == 2 );
 }
 
 stock bool IsEntityValid( int entity )
 {
 	return (entity > MaxClients && IsValidEntity( entity ));
-}
-
-stock int GetClientIndex( int serial, bool toindex )
-{
-	if( toindex )								//toindex true convert serial to index 
-	{
-		return GetClientOfUserId( serial );
-	}
-	else										//toindex false convert index to serial
-	{
-		return GetClientUserId( serial );
-	}
 }
 
 stock int GetZclass( int client )
@@ -701,21 +742,7 @@ stock bool TraceEntityFilterPlayers( int entity, int contentsMask, any data ) //
 	return ( entity > MaxClients && entity != data );
 }
 
-stock void FreezePlayerButton( int client, bool set_freeze )
-{
-	int buttons = GetEntityFlags( client );
-	if( set_freeze )
-	{
-		SetEntityFlags( client, ( buttons |= FL_FROZEN ));
-	}
-	else
-	{
-		if( buttons & FL_FROZEN )
-		{
-			SetEntityFlags( client, ( buttons &= ~FL_FROZEN ));
-		}
-	}
-}
+
 
 /*
 CreateTimer( 0.1, Timer_Test, userid, TIMER_REPEAT );
